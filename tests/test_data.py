@@ -191,8 +191,8 @@ def test_layout_adapter_cnn():
     imag = torch.randn(2, 5, 8)
     out = LayoutAdapter("cnn")(real, imag)
     assert out.shape == (2, 2, 5, 8)
-    assert torch.equal(out[:, 0], real)
-    assert torch.equal(out[:, 1], imag)
+    assert torch.equal(out[:, 0], imag)
+    assert torch.equal(out[:, 1], real)
 
 
 def test_layout_adapter_transformer_interleaved():
@@ -203,8 +203,8 @@ def test_layout_adapter_transformer_interleaved():
     for b in range(2):
         for s in range(3):
             for p in range(4):
-                assert out[b, s, 2 * p] == real[b, s, p]
-                assert out[b, s, 2 * p + 1] == imag[b, s, p]
+                assert out[b, s, 2 * p] == imag[b, s, p]
+                assert out[b, s, 2 * p + 1] == real[b, s, p]
 
 
 def test_layout_adapter_bad_layout():

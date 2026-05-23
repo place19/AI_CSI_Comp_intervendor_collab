@@ -73,4 +73,4 @@ class ReshapeHead(Block):
         if x.dim() > 2:
             x = x.flatten(1)
         x = self.linear(x)
-        return x.view(x.shape[0], self.max_subband, self.max_port, 2)
+        return x.view(-1, self.max_subband, self.max_port, 2)

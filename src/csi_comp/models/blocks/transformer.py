@@ -20,7 +20,7 @@ class MultiHeadSelfAttention(nn.Module):
     `state_dict` / FLOPs traces).
     """
 
-    def __init__(self, d_model: int, nhead: int, dropout: float = 0.0):
+    def __init__(self, d_model: int, nhead: int, dropout: float = 0.0, seq_len: Optional[int] = None):
         super().__init__()
         if d_model % nhead != 0:
             raise ValueError(f"d_model ({d_model}) must be divisible by nhead ({nhead})")
@@ -28,6 +28,7 @@ class MultiHeadSelfAttention(nn.Module):
         self.nhead = int(nhead)
         self.d_head = self.d_model // self.nhead
         self.scale = self.d_head ** -0.5
+        self.seq_len = int(seq_len) if seq_len is not None else None
 
         self.W_Q = nn.Linear(d_model, d_model)
         self.W_K = nn.Linear(d_model, d_model)
@@ -36,11 +37,11 @@ class MultiHeadSelfAttention(nn.Module):
         self.attn_dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, S, _ = x.shape
+        S = self.seq_len if self.seq_len is not None else x.shape[1]
         # Project then split into heads: (B, S, d_model) -> (B, H, S, d_head)
-        q = self.W_Q(x).view(B, S, self.nhead, self.d_head).transpose(1, 2)
-        k = self.W_K(x).view(B, S, self.nhead, self.d_head).transpose(1, 2)
-        v = self.W_V(x).view(B, S, self.nhead, self.d_head).transpose(1, 2)
+        q = self.W_Q(x).view(-1, S, self.nhead, self.d_head).transpose(1, 2)
+        k = self.W_K(x).view(-1, S, self.nhead, self.d_head).transpose(1, 2)
+        v = self.W_V(x).view(-1, S, self.nhead, self.d_head).transpose(1, 2)
 
         # Scores: (B, H, S, S)
         scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
@@ -51,7 +52,7 @@ class MultiHeadSelfAttention(nn.Module):
         attn = attn.to(v.dtype)
         attn = self.attn_dropout(attn)
         # (B, H, S, d_head) → (B, S, d_model)
-        out = torch.matmul(attn, v).transpose(1, 2).contiguous().view(B, S, self.d_model)
+        out = torch.matmul(attn, v).transpose(1, 2).reshape(-1, S, self.d_model)
         return self.W_O(out)
 
 
@@ -98,7 +99,7 @@ class TransformerBlock(Block):
             )
         ff_dim = int(ff_dim) if ff_dim is not None else 4 * d_model
 
-        self.attn = MultiHeadSelfAttention(d_model, nhead, dropout=dropout)
+        self.attn = MultiHeadSelfAttention(d_model, nhead, dropout=dropout, seq_len=S)
         self.ln1 = nn.LayerNorm(d_model)
         self.ff = nn.Sequential(
             nn.Linear(d_model, ff_dim),

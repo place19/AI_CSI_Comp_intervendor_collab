@@ -49,4 +49,4 @@ class ReshapeBlock(Block):
         self.out_shape = resolved
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x.reshape(x.shape[0], *self.out_shape)
+        return x.reshape(-1, *self.out_shape)

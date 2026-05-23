@@ -22,9 +22,9 @@ class LayoutAdapter(nn.Module):
 
     def forward(self, real: torch.Tensor, imag: torch.Tensor) -> torch.Tensor:
         if self.layout == "cnn":
-            return torch.stack([real, imag], dim=1)            # (B, 2, S, P)
-        # transformer: interleave real/imag per port
-        x = torch.stack([real, imag], dim=-1)                  # (B, S, P, 2)
+            return torch.stack([imag, real], dim=1)            # (B, 2, S, P)
+        # transformer: interleave imag/real per port
+        x = torch.stack([imag, real], dim=-1)                  # (B, S, P, 2)
         B, S, P, _ = x.shape
         return x.reshape(B, S, P * 2)                          # (B, S, P*2)
 
