@@ -62,6 +62,20 @@ def test_one_minus_sgcs_mask_aware():
     assert val == pytest.approx(0.0, abs=1e-5)
 
 
+def test_one_minus_sgcs_port_level_mask():
+    """Padded ports within a valid subband should not affect SGCS."""
+    # P=4 but only first 2 ports are valid (mask[:,s,2:] = False).
+    # Corrupt ports 2,3 in the reconstruction — loss should still be ~0.
+    w = torch.randn(2, 4, 4, 2)
+    w_hat = w.clone()
+    w_hat[:, :, 2:, :] = 99.0  # garbage in padded ports
+    mask = torch.zeros(2, 4, 4, dtype=torch.bool)
+    mask[:, :, :2] = True  # only ports 0-1 are valid
+    loss = OneMinusSGCS()
+    val = loss({"recon": w_hat}, {"precoder": w, "mask": mask}).item()
+    assert val == pytest.approx(0.0, abs=1e-5)
+
+
 def test_one_minus_sgcs_no_mask():
     w = torch.randn(2, 4, 8, 2)
     loss = OneMinusSGCS()

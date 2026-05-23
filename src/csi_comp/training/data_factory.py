@@ -4,7 +4,7 @@ YAML schema (all keys optional unless marked required):
 
     data:
       format: npz | lmdb_raw            # required
-      train_path: ...                   # required
+      train_path: ...                   # required for build_dataloaders; not used by build_val_loader
       val_path: ...                     # required
       max_subband: int                  # required (for collate)
       max_port: int                     # required (for collate)
