@@ -124,6 +124,11 @@ python scripts/test.py --checkpoint outputs/<run>/best.pt
 python scripts/export_onnx.py \
   --checkpoint outputs/<run>/best.pt \
   --scope encoder --out exports/
+
+# Run inference on a dataset (outputs saved to <ckpt parent>/infer_<timestamp>/)
+python scripts/infer.py \
+  --checkpoint outputs/<run>/best.pt \
+  --data-path /path/to/data.npz
 ```
 
 ---
