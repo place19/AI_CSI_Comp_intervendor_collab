@@ -8,7 +8,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from _common import apply_cli_device, set_cuda_visible_early
+from _common import apply_cli_device, set_cuda_visible_early, set_cuda_visible_from_args
 
 
 def _parse_args() -> argparse.Namespace:
@@ -29,6 +29,7 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    set_cuda_visible_from_args(args)  # must precede torch import
     import torch
     from csi_comp.config import apply_overrides, resolve
     from csi_comp.losses.composite import WeightedSumLoss

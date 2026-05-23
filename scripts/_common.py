@@ -88,6 +88,18 @@ def set_cuda_visible_early(experiment_cfg: dict) -> None:
         os.environ.setdefault("CUDA_VISIBLE_DEVICES", str(int(gpu_index)))
 
 
+def set_cuda_visible_from_args(args: argparse.Namespace) -> None:
+    """Set CUDA_VISIBLE_DEVICES from CLI --device/--gpu-index BEFORE torch is
+    imported. Call this as early as possible in main(), before any torch import.
+
+    This covers the case where test.py/infer.py must torch.load the checkpoint
+    to read the embedded config (so set_cuda_visible_early cannot fire first).
+    GPU index from the embedded config is NOT applied here — that requires
+    torch.load and is an accepted limitation of the embedded-config approach."""
+    if getattr(args, "device", None) == "cuda" and getattr(args, "gpu_index", None) is not None:
+        os.environ.setdefault("CUDA_VISIBLE_DEVICES", str(int(args.gpu_index)))
+
+
 def load_resolved_config(path: Path, overrides: Iterable[str]) -> dict:
     """Lazy import to defer torch loading."""
     from csi_comp.config import load_and_resolve

@@ -1,13 +1,20 @@
-"""Device setup. CUDA selection uses CUDA_VISIBLE_DEVICES, set before importing torch.
+"""Device setup helpers.
 
-The intended use is for entry-point scripts:
-    1. Parse config.
-    2. configure_device(cfg) — sets env var.
-    3. THEN import torch (the heavy stuff).
+CUDA GPU selection must happen before PyTorch initialises CUDA. The correct
+call order in entry-point scripts is:
 
-For library usage where torch is already imported, calling configure_device only
-adjusts the env var (won't affect torch's already-cached device list) and returns
-the resolved torch.device.
+    1. Parse args / config.
+    2. Call _common.set_cuda_visible_early() (or set_cuda_visible_from_args())
+       — this sets CUDA_VISIBLE_DEVICES *before* torch is imported.
+    3. Import torch and the rest of the heavy stack.
+    4. Call configure_device(cfg) — by this point torch is already imported,
+       so this function only returns the resolved torch.device object (and sets
+       CUDA_VISIBLE_DEVICES as a late fallback for library callers that skipped
+       step 2).
+
+Note: this module itself imports torch at module load time, so importing it
+already triggers step 3. Always call set_cuda_visible_early/from_args before
+importing anything from csi_comp.
 """
 from __future__ import annotations
 

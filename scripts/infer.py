@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 from typing import List
 
-from _common import apply_cli_device, set_cuda_visible_early
+from _common import apply_cli_device, set_cuda_visible_early, set_cuda_visible_from_args
 
 
 SAVE_ITEMS = ["recon", "latent", "quant_latent", "original", "mask", "sgcs_per_sample"]
@@ -87,6 +87,7 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    set_cuda_visible_from_args(args)  # must precede torch import
     import torch
     from csi_comp.config import apply_overrides, resolve
 
