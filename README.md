@@ -12,7 +12,8 @@ Built around a config-driven, registry-based block system so new encoders/decode
 - **Registry-based blocks**: CNN, depthwise-separable conv, residual, average pooling, transformer (custom Q/K/V/O with selectable pre/post-LN), positional encoding (fixed sin/cos · learnable random · learnable sin/cos), reshape, linear projection, standalone activation, bounding head, reshape head, complex FFN head (per-branch real/imag projections). Add a new block with a single `@register("block", "name")` decorator.
 - **Fixed-shape forward contract**: every block declares `out_shape` in `__init__` and has a single `forward(x) -> x` signature; the encoder/decoder builder propagates shapes statically. Padding masks live only on the data batch and are consumed by the loss — not threaded through the model.
 - **Configurable quantizer**: uniform quantization with pluggable gradient strategies (STE / soft / hard). Bit-width, range, and level spacing all configurable.
-- **Composite loss**: weighted sum of named loss terms (`one_minus_sgcs`, `mse_latent`, `mse_quant_latent`, …). Add new terms via the loss registry.
+- **Composite loss**: weighted sum of named loss terms (`one_minus_sgcs`, `mse_latent`, `mse_quant_latent`, `dual_one_minus_sgcs`, …). Add new terms via the loss registry.
+- **Latent masking** (`model.latent_mask`): zero out the trailing fraction of the quantized latent before the decoder to simulate partial-bandwidth scenarios. Four modes: `full` (disabled), `half` (fixed), `random` (per-sample augmentation), `dual` (decoder called twice; loss is a weighted sum of full- and half-latent reconstructions). Independent of `training.mode`; applies to both training and validation.
 - **Schedulers**: PyTorch built-ins (`cosine`, `step`, `none`) plus a custom `warmup_cosine` (linear warmup → cosine annealing, iteration-unit).
 - **Optimizer hygiene**: AdamW/Adam/SGD split params into decay and no-decay groups (LayerNorm + bias excluded by default, GPT-2/BERT convention).
 - **Profiler with fusion awareness**: strict per-block FLOPs (every mul and add counted) and params on the fused inference model. Blocks declare `fusion_pairs: [(absorber, absorbee), ...]` (e.g. Conv2d ↔ BatchNorm2d) and the profiler drops absorbee FLOPs/params while forcing the absorber to be counted as biased — recursively through nested blocks.
@@ -187,6 +188,12 @@ model:
       - { name: linear_proj, out_dim: 256, activation: relu }
       - { name: linear_proj, out_dim: "${mul:${data.max_subband},${data.max_port}}", activation: relu }
       - { name: reshape_head, max_subband: "${data.max_subband}", max_port: "${data.max_port}" }
+  # Latent masking (optional) — zeros trailing elements of the quantized latent
+  # before the decoder to simulate partial-bandwidth / robustness scenarios.
+  # Omit this block (or set mode: full) to disable.
+  # latent_mask:
+  #   mode: half          # full | half | dual | random
+  #   mask_ratio: 0.5     # fraction zeroed (trailing); default 0.5
 
 quantizer:
   type: uniform
@@ -221,6 +228,10 @@ training:
 loss:
   terms:
     - { name: one_minus_sgcs, weight: 1.0 }
+    # For latent_mask.mode: dual, use dual_one_minus_sgcs instead:
+    # - name: dual_one_minus_sgcs
+    #   weight: 1.0
+    #   params: { full_weight: 0.5, half_weight: 0.5 }
 ```
 
 ### CLI overrides
@@ -285,8 +296,9 @@ The same pattern (`@register("losses"|"quantizer"|"dataset"|"scheduler", "...")`
 ## Testing
 
 ```bash
-pytest                # full suite (296 tests)
+pytest                # full suite (331 tests)
 pytest tests/test_amp.py tests/test_compile.py tests/test_onnx_fuse.py -v
+pytest tests/test_latent_mask.py -v   # latent masking unit + integration tests
 ```
 
 ---
@@ -301,8 +313,9 @@ src/csi_comp/
   models/
     blocks/              # block implementations
     encoder.py decoder.py autoencoder.py
+    latent_mask.py       # LatentMaskSpec + masking helpers
   quantization/          # UniformQuantizer + gradient strategies (STE / soft / hard)
-  losses/                # SGCS, MSE latent, composite WeightedSumLoss
+  losses/                # SGCS, MSE latent, dual SGCS, composite WeightedSumLoss
   training/
     trainer.py           # mode-agnostic loop (AMP-aware)
     builders.py          # build_model / build_optimizer / build_scheduler

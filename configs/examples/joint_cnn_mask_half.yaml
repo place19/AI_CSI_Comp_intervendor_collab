@@ -1,0 +1,61 @@
+experiment:
+  name: joint_cnn_mask_half
+  seed: 42
+  device: cpu
+  gpu_index: 0
+  mlflow:
+    tracking_uri: http://127.0.0.1:5000
+    experiment_name: csi_compression
+    log_every_n_iters: 10
+
+data:
+  format: npz
+  train_path: /path/to/train_dataset.npz
+  val_path: /path/to/valid_dataset.npz
+  max_subband: 13
+  max_port: 32
+  layout: cnn
+  batch_size: 16
+  num_workers: 0
+
+model:
+  # Latent masking: always zero out the trailing 50% of quantized latent elements
+  # before feeding them to the decoder. The first 50% is always kept.
+  # Omit this block (or set mode: full) to disable masking entirely.
+  latent_mask:
+    mode: half        # "full" | "half" | "dual" | "random"
+    mask_ratio: 0.5   # fraction of latent elements zeroed (trailing)
+  encoder:
+    blocks:
+      - { name: cnn_block, channels: 16, kernel: 3 }
+      - { name: cnn_block, channels: 32, kernel: 3 }
+      - { name: linear_proj, out_dim: 64, activation: relu }
+      - { name: activation, activation: tanh }
+  decoder:
+    blocks:
+      - { name: linear_proj, out_dim: 128, activation: relu }
+      - { name: reshape_head, max_subband: "${data.max_subband}", max_port: "${data.max_port}" }
+    pretrained_path: null
+
+quantizer:
+  type: uniform
+  bits: 2
+  value_range: [-1.0, 1.0]
+  unit_spaced: true
+  grad: ste
+
+training:
+  mode: joint
+  epochs: 3
+  optimizer: { name: adam, lr: 1.0e-3 }
+  scheduler: { name: cosine, T_max: 3 }
+  val_every_n_epochs: 1
+  best_metric: { name: sgcs, mode: max }
+  amp:
+    enabled: false
+  compile:
+    enabled: false
+
+loss:
+  terms:
+    - { name: one_minus_sgcs, weight: 1.0 }
