@@ -1,4 +1,4 @@
-"""Descriptive best filename + best.pt hardlink behavior."""
+"""Descriptive best filename + stable checkpoint link behavior."""
 from __future__ import annotations
 
 import math
@@ -76,7 +76,7 @@ def test_format_nan_falls_back():
     assert format_best_filename(5, "sgcs", math.inf) == "best_e005.pt"
 
 
-def test_best_pt_hardlinks_to_descriptive(tmp_path):
+def test_best_pt_links_to_descriptive(tmp_path):
     cfg, ae, opt = _trainer_fixture()
     cb = CheckpointCallback(out_dir=tmp_path, config=cfg)
     trainer = _FakeTrainer(
@@ -135,7 +135,7 @@ def test_no_improvement_means_no_save(tmp_path):
     assert list(tmp_path.glob("best_e*.pt")) == []
 
 
-def test_load_checkpoint_works_through_hardlink(tmp_path):
+def test_load_checkpoint_works_through_stable_link(tmp_path):
     cfg, ae, opt = _trainer_fixture()
     cb = CheckpointCallback(out_dir=tmp_path, config=cfg)
     trainer = _FakeTrainer(
