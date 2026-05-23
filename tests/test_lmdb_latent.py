@@ -59,10 +59,10 @@ def test_lmdb_raw_latent_values_round_trip(tmp_path):
         np.testing.assert_array_equal(ds[i]["latent_target"].numpy(), expected[i])
 
 
-def test_lmdb_raw_with_latent_counts_only_primary_prefix(tmp_path):
+def test_lmdb_raw_with_latent_counts_exact_pattern(tmp_path):
     """The real CDL lmdb holds D, Z, *and* Zq keys per sample. with_latent=True
-    must count by the primary `key_prefix` ('D' by default) so extra key families
-    (here 'Z' for pre-quant latents) don't inflate the dataset length."""
+    must count only keys matching {key_prefix}{idx:06d} ('D000000' by default)
+    so extra key families (here 'Z' for pre-quant latents) don't inflate the count."""
     n, S, P, latent_dim = 4, 3, 4, 8
     path = tmp_path / "db"
     path.mkdir(parents=True, exist_ok=True)
@@ -115,8 +115,8 @@ def test_lmdb_raw_count_ignores_d_prefixed_metadata_keys(tmp_path):
     assert len(ds) == n, f"expected {n}, got {len(ds)} — D_meta inflated the count"
 
 
-def test_lmdb_raw_without_latent_counts_primary_only(tmp_path):
-    """Default with_latent=False still counts only the primary prefix keys.
+def test_lmdb_raw_without_latent_counts_exact_pattern(tmp_path):
+    """Default with_latent=False counts only keys matching {key_prefix}{idx:06d}.
     Auxiliary key families (Zq here) in the env are silently ignored — this
     keeps len(ds) sane when the lmdb holds paired data but the user only wants
     the precoder side."""
