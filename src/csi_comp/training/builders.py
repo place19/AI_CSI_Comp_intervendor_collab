@@ -34,6 +34,10 @@ def build_model(
 
     if mode_spec.needs_encoder:
         encoder, enc_trace = build_encoder(model_cfg, data_cfg)
+        if not enc_trace:
+            raise ValueError(
+                "model.encoder.blocks is empty; add at least one block to define the latent shape"
+            )
         latent_shape = enc_trace[-1].out_shape
 
     if mode_spec.needs_quantizer:

@@ -51,7 +51,7 @@ training:
   optimizer: { name: adam, lr: 1.0e-3 }
   scheduler: { name: cosine, T_max: 3 }
   val_every_n_epochs: 1
-  best_metric: { name: sgcs, mode: max }
+  best_metric: { name: loss/total, mode: min }  # dual mode tracks both full+half paths via the combined loss
   amp:
     enabled: false
   compile:

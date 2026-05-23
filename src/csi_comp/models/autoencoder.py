@@ -10,14 +10,15 @@ import torch.nn as nn
 class Autoencoder(nn.Module):
     """Pipes (real, imag) through encoder → quantizer → decoder.
 
-    Any of {quantizer, decoder} may be None to support encoder-only or
-    decoder-skipping configurations. The forward output is a dict so loss
-    terms can pull what they need.
+    Any of {encoder, quantizer, decoder} may be None depending on training mode
+    (decoder_only omits encoder+quantizer; encoder_only omits decoder). The
+    forward output is a dict so loss terms can pull what they need. Note: forward()
+    is not called in decoder_only mode — the trainer feeds latent_target directly.
     """
 
     def __init__(
         self,
-        encoder: nn.Module,
+        encoder: Optional[nn.Module] = None,
         quantizer: Optional[nn.Module] = None,
         decoder: Optional[nn.Module] = None,
     ):

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from csi_comp.training import build_dataloaders
+from csi_comp.training import build_dataloaders, build_val_loader
 
 
 def _base_cfg(npz_root):
@@ -87,3 +87,18 @@ def test_batch_size_required(npz_root):
     # val_loader gets no batch_size → should fail clearly
     with pytest.raises(ValueError):
         build_dataloaders(cfg)
+
+
+def test_build_val_loader_without_train_path(npz_root):
+    """build_val_loader must work with only val_path — no train_path required."""
+    cfg = {
+        "format": "npz",
+        "val_path": str(npz_root / "val.npz"),
+        "max_subband": 8,
+        "max_port": 16,
+        "batch_size": 4,
+    }
+    val = build_val_loader(cfg)
+    batch = next(iter(val))
+    assert "real" in batch
+    assert batch["real"].shape[0] <= 4
