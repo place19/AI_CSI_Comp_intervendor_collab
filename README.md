@@ -173,7 +173,10 @@ data:
   # pin_memory: false
   # prefetch_factor: 2               # only honoured when num_workers > 0
   # persistent_workers: false        # only honoured when num_workers > 0
-  # drop_last: false
+  # drop_last: false                   # applies to train loader only when using
+  #                                    # build_val_loader (test/infer); val loader
+  #                                    # always defaults to drop_last=false to see
+  #                                    # every sample. Use val_loader.drop_last to override.
   # train_loader: { shuffle: true,  drop_last: false }   # per-split overrides
   # val_loader:   { shuffle: false, drop_last: false }
   dataset_args:

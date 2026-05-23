@@ -15,7 +15,9 @@ YAML schema (all keys optional unless marked required):
       pin_memory: bool                  # default False
       prefetch_factor: int              # forwarded only when num_workers > 0
       persistent_workers: bool          # forwarded only when num_workers > 0
-      drop_last: bool                   # default False
+      drop_last: bool                   # default False; build_val_loader ignores this
+                                        # (evaluation must see every sample). Use
+                                        # val_loader.drop_last to override explicitly.
 
       # Optional per-split overrides — merged on top of the defaults above:
       train_loader: { batch_size?, shuffle?, num_workers?, prefetch_factor?,
