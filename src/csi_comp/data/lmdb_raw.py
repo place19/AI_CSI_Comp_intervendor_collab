@@ -42,8 +42,9 @@ class LmdbRawDataset(Dataset):
         latent_dtype:        on-disk float dtype for the latent ("f4" = float32).
 
     When `with_latent=True` the lmdb is expected to hold paired latent keys
-    (e.g. b"Zq000000" alongside b"D000000"). `len(self)` counts only keys with
-    the primary prefix so auxiliary key families do not inflate the count.
+    (e.g. b"Zq000000" alongside b"D000000"). `len(self)` counts only keys that
+    match the exact pattern `{key_prefix}{idx:06d}` so auxiliary key families
+    and D-prefixed metadata keys do not inflate the count.
     """
 
     def __init__(
@@ -72,9 +73,8 @@ class LmdbRawDataset(Dataset):
         self._env = None
         self._txn = None
         with self._open_env() as env:
-            # Always count only keys with the primary prefix — the env may hold
-            # auxiliary key families (e.g. Z, Zq for paired latents) and we
-            # don't want to inflate `len(self)` by counting them.
+            # Count only keys matching exactly {key_prefix}{idx:06d} — auxiliary
+            # key families (Z, Zq) and D-prefixed metadata keys are excluded.
             self._n = self._count_keys_with_prefix(env, self.key_prefix)
 
     def _open_env(self) -> lmdb.Environment:
