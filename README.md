@@ -145,8 +145,8 @@ experiment:
 
 data:
   format: npz                        # 'npz' (single file) or 'lmdb_raw' (directory)
-  train_path: ../make_lmdb/train_dataset.npz
-  val_path: ../make_lmdb/valid_dataset.npz
+  train_path: /path/to/train_dataset.npz
+  val_path: /path/to/valid_dataset.npz
   max_subband: 13
   max_port: 32
   layout: cnn                        # 'cnn' or 'transformer'
