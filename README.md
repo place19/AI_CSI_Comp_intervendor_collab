@@ -101,15 +101,14 @@ plain `outputs/<experiment.name>/` path (handy for tests / stable links).
 `scripts/resume.py` adds `_resume` after the timestamp so a continuation is
 visually distinct.
 
-`best.pt` is a **hardlink** to a sibling file whose name encodes the run state
-at the moment the best was last updated — `best_e{epoch:03d}_{metric}{value:.4f}.pt`
-(e.g. `best_e023_sgcs0.8421.pt`) — so you can see at a glance which epoch and
-metric produced the saved best without opening the file. The stable name
-`best.pt` keeps working for downstream scripts (`test.py`, `infer.py`,
-`export_onnx.py`, `resume.py`) at zero extra disk cost (single inode). On
-filesystems that refuse hardlinks the code falls back to a copy. Windows is
-supported — hardlinks work without admin/Developer Mode and `torch.load`
-follows them transparently.
+Both `best.pt` and `latest.pt` are **symlinks** to sibling files whose names
+encode the run state — `best_e{epoch:03d}_{metric}{value:.4f}.pt` /
+`latest_e{epoch:03d}_{metric}{value:.4f}.pt` (e.g. `best_e023_sgcs0.8421.pt`)
+— so you can see at a glance which epoch and metric produced each checkpoint
+without opening it. The stable names keep working for downstream scripts
+(`test.py`, `infer.py`, `export_onnx.py`, `resume.py`) at zero extra disk
+cost. On filesystems that refuse symlinks the code falls back to a hardlink,
+then a copy.
 
 ### 4. Other entry points
 
