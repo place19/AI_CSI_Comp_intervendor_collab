@@ -138,17 +138,31 @@ def main() -> int:
             real = batch["real"].to(device)
             imag = batch["imag"].to(device)
             mask = batch["mask"].to(device)
-            latent = ae.encoder(real, imag)
-            q_latent = ae.quantizer(latent) if ae.quantizer is not None else latent
-            if mask_spec is not None and ae.decoder is not None:
-                if mask_spec.mode == "half":
-                    decoder_input = apply_latent_mask(q_latent, mask_spec.mask_ratio)
-                elif mask_spec.mode == "random":
-                    decoder_input = apply_random_latent_mask(q_latent, mask_spec.mask_ratio)
-                else:  # dual: full path (matches validate() which uses recon_full)
+
+            if spec.needs_encoder:
+                latent = ae.encoder(real, imag)
+                q_latent = ae.quantizer(latent) if ae.quantizer is not None else latent
+                if mask_spec is not None and ae.decoder is not None:
+                    if mask_spec.mode == "half":
+                        decoder_input = apply_latent_mask(q_latent, mask_spec.mask_ratio)
+                    elif mask_spec.mode == "random":
+                        decoder_input = apply_random_latent_mask(q_latent, mask_spec.mask_ratio)
+                    else:  # dual: full path (matches validate() which uses recon_full)
+                        decoder_input = q_latent
+                else:
                     decoder_input = q_latent
             else:
-                decoder_input = q_latent
+                # decoder_only: latent is provided by the dataset
+                raw_latent = batch.get("latent_target")
+                if raw_latent is None:
+                    raise RuntimeError(
+                        "decoder_only mode requires 'latent_target' in the batch; "
+                        "set dataset_args.latent_key in the config"
+                    )
+                latent = raw_latent.to(device)
+                q_latent = latent
+                decoder_input = latent
+
             recon = ae.decoder(decoder_input) if ae.decoder is not None else None
             out = {"latent": latent, "quantized_latent": q_latent, "recon": recon}
 

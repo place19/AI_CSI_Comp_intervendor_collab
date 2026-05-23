@@ -73,7 +73,9 @@ class CnnBlock(Block):
         elif norm == "batchnorm":
             self.norm = nn.BatchNorm2d(int(channels))
         elif norm == "groupnorm":
-            self.norm = nn.GroupNorm(min(8, int(channels)), int(channels))
+            c = int(channels)
+            g = next(g for g in range(min(8, c), 0, -1) if c % g == 0)
+            self.norm = nn.GroupNorm(g, c)
         else:
             raise ValueError(f"unknown norm: {norm!r}")
         self.act = make_activation(activation)

@@ -117,7 +117,7 @@ then a copy.
 python scripts/resume.py --checkpoint outputs/<run>/latest.pt --set training.epochs=60
 
 # Evaluate
-python scripts/test.py --checkpoint outputs/<run>/best.pt
+python scripts/test.py --config configs/examples/<name>.yaml --checkpoint outputs/<run>/best.pt
 
 # Export to ONNX (encoder, encoder_quant, decoder, full)
 python scripts/export_onnx.py \
@@ -126,6 +126,7 @@ python scripts/export_onnx.py \
 
 # Run inference on a dataset (outputs saved to <ckpt parent>/infer_<timestamp>/)
 python scripts/infer.py \
+  --config configs/examples/<name>.yaml \
   --checkpoint outputs/<run>/best.pt \
   --data-path /path/to/data.npz
 ```

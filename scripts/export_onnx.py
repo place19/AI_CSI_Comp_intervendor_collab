@@ -11,6 +11,20 @@ from pathlib import Path
 
 import _common  # noqa: F401 — side-effect: makes csi_comp importable without `pip install -e .`
 
+# Scopes available per training mode. Requesting a scope that requires a module
+# not trained in that mode (e.g. encoder from a decoder_only checkpoint) would
+# export random/unloaded weights — so we reject it early.
+_MODE_ALLOWED_SCOPES: dict[str, frozenset[str]] = {
+    "encoder_only":               frozenset(("encoder", "encoder_quant")),
+    "decoder_only":               frozenset(("decoder",)),
+    "joint":                      frozenset(("encoder", "encoder_quant", "decoder", "full")),
+    "encoder_only_frozen_decoder": frozenset(("encoder", "encoder_quant", "decoder", "full")),
+}
+_MODE_DEFAULT_SCOPE: dict[str, str] = {
+    "encoder_only": "encoder,encoder_quant",
+    "decoder_only": "decoder",
+}
+
 
 def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -18,8 +32,11 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--out", type=Path, required=True, help="output directory")
     ap.add_argument(
         "--scope",
-        default="encoder,encoder_quant,decoder,full",
-        help="comma-separated subset of encoder,encoder_quant,decoder,full",
+        default=None,
+        help=(
+            "comma-separated subset of encoder,encoder_quant,decoder,full. "
+            "Defaults to all scopes valid for the checkpoint's training mode."
+        ),
     )
     ap.add_argument("--dynamic-shape", action="store_true")
     ap.add_argument("--verify", action="store_true", default=True)
@@ -35,16 +52,10 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    scopes = [s.strip() for s in args.scope.split(",") if s.strip()]
     import torch
     from csi_comp.export import VALID_SCOPES, export_to_onnx, verify_onnx_parity
     from csi_comp.training import build_model, get_mode_spec
     from csi_comp.training.checkpoint import load_checkpoint
-
-    for s in scopes:
-        if s not in VALID_SCOPES:
-            print(f"unknown scope: {s!r}; valid: {VALID_SCOPES}", file=sys.stderr)
-            return 2
 
     sd = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     cfg = sd.get("config")
@@ -52,14 +63,36 @@ def main() -> int:
         print("checkpoint missing embedded config", file=sys.stderr)
         return 2
 
-    # Choose the minimum build mode for the requested scopes.
-    # Forcing joint unconditionally fails for encoder_only checkpoints whose
-    # decoder.blocks is empty (build_decoder raises on the terminal-shape check).
-    # Use encoder_only when the checkpoint was trained that way and no decoder
-    # scope is being exported.
     original_mode = cfg.get("training", {}).get("mode", "joint")
-    needs_decoder_scope = any(s in ("decoder", "full") for s in scopes)
-    build_mode = "joint" if (original_mode != "encoder_only" or needs_decoder_scope) else "encoder_only"
+
+    # Resolve scope: use explicit --scope, or the mode-appropriate default.
+    scope_str = args.scope or _MODE_DEFAULT_SCOPE.get(original_mode, "encoder,encoder_quant,decoder,full")
+    scopes = [s.strip() for s in scope_str.split(",") if s.strip()]
+
+    for s in scopes:
+        if s not in VALID_SCOPES:
+            print(f"unknown scope: {s!r}; valid: {VALID_SCOPES}", file=sys.stderr)
+            return 2
+
+    # Reject scopes that require modules not trained in this mode (would export
+    # random/unloaded weights).
+    allowed = _MODE_ALLOWED_SCOPES.get(original_mode, frozenset(VALID_SCOPES))
+    bad = [s for s in scopes if s not in allowed]
+    if bad:
+        print(
+            f"scope(s) {bad} not valid for a {original_mode!r} checkpoint "
+            f"(allowed: {sorted(allowed)})",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Build the minimum model for the requested scopes.
+    if original_mode == "decoder_only":
+        build_mode = "decoder_only"
+    elif original_mode == "encoder_only":
+        build_mode = "encoder_only"
+    else:
+        build_mode = "joint"
     cfg = dict(cfg)
     cfg.setdefault("training", {})["mode"] = build_mode
     spec = get_mode_spec(build_mode)

@@ -73,6 +73,17 @@ class NpzDataset(Dataset):
                 f"latent_key must be 'Zq', 'Z', or None; got {latent_key!r}"
             )
         chosen = latents[latent_key]
+        if latent_key is not None and chosen is None:
+            raise ValueError(
+                f"latent_key={latent_key!r} but array {latent_key!r} is absent "
+                f"from {self.path}; available arrays: {sorted(files)}"
+            )
+        for arr_name, arr in (("Z", Z), ("Zq", Zq)):
+            if arr is not None and arr.shape[0] != D.shape[0]:
+                raise ValueError(
+                    f"{arr_name}.shape[0]={arr.shape[0]} != D.shape[0]={D.shape[0]} "
+                    f"in {self.path}"
+                )
         self.latent_target = (
             torch.from_numpy(np.ascontiguousarray(chosen).astype(np.float32, copy=False))
             if chosen is not None else None
