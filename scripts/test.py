@@ -22,7 +22,7 @@ def _parse_args() -> argparse.Namespace:
         metavar="KEY=VALUE",
         help="override a config key (repeatable)",
     )
-    ap.add_argument("--device", choices=("cpu", "cuda"), default=None)
+    ap.add_argument("--device", choices=("cpu", "cuda", "mps"), default=None)
     ap.add_argument("--gpu-index", type=int, default=None)
     return ap.parse_args()
 

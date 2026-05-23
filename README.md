@@ -21,7 +21,7 @@ Built around a config-driven, registry-based block system so new encoders/decode
   - **Console**: always-on stdout progress (epoch/step/loss/SGCS/LR), throttled to a windowed mean.
   - **MLflow** (optional): windowed-mean train metrics, **epoch-indexed validation metrics**, per-run note with full config + per-block FLOPs/params/output shapes, resolved-config artifact. Checkpoints are NOT uploaded — they live only in `outputs/<run>/`.
 - **Devices**: `cpu`, `cuda` (selected via `CUDA_VISIBLE_DEVICES`), `mps` (Apple Silicon). For `test.py` / `infer.py`, `gpu_index` embedded in the checkpoint config cannot be applied before `torch.load()` — pass `--device cuda --gpu-index N` on the CLI to select a specific GPU with these scripts.
-- **Data formats**: raw int8 LMDB (`lmdb_raw`) and single-file `.npz` (`npz`) with keys `D`/`Z`/`Zq`. Datasets emit a separate `real_target`/`imag_target` pair offset by `target_offset` (default `1/256`) to model the 3GPP/HW int8 floor-quantization bin midpoint.
+- **Data formats**: raw int8 LMDB (`lmdb_raw`) and single-file `.npz` (`npz`). `D` (int8 CSI) is the only required array; `Z`/`Zq` (latent arrays) are optional and only needed for `decoder_only` mode or latent-space losses. Datasets emit a separate `real_target`/`imag_target` pair offset by `target_offset` (default `1/256`) to model the 3GPP/HW int8 floor-quantization bin midpoint.
 - **DataLoader knobs from YAML**: `num_workers`, `pin_memory`, `prefetch_factor`, `persistent_workers`, `drop_last` plus per-split `train_loader` / `val_loader` overrides.
 - **Mixed precision (AMP)**: `training.amp.{enabled, dtype}` wraps the forward in `torch.amp.autocast` for train + val. Two fp32 islands are baked in — loss computation and MHA softmax — to prevent backprop blow-ups seen under naive fp16. `GradScaler` is only constructed for cuda + fp16.
 - **`torch.compile`** (optional): `training.compile.{enabled, mode, dynamic, fullgraph}` compiles encoder and decoder separately (quantizer stays uncompiled — STE backward is hostile to graph capture). Checkpoints save the underlying `_orig_mod` state_dict so disk files load cleanly into compiled or uncompiled inference builds.
@@ -58,10 +58,12 @@ PyTorch installation: follow [pytorch.org](https://pytorch.org) for the right CU
 
 The framework reads two on-disk formats:
 
-- **`npz`** — a single `.npz` file with three arrays: `D` (int8 `(N, S, P, 2)` CSI),
-  `Z` (float32 `(N, latent_dim)` pre-quant latent), `Zq` (post-quant latent).
+- **`npz`** — a single `.npz` file. `D` (int8 `(N, S, P, 2)` CSI) is required;
+  `Z` (float32 `(N, latent_dim)` pre-quant latent) and `Zq` (post-quant latent)
+  are optional — needed only for `decoder_only` mode or latent-space losses.
   Loaded fully into RAM.
-- **`lmdb_raw`** — a directory-style LMDB with keys `D{i:06d}` / `Z{i:06d}` / `Zq{i:06d}`.
+- **`lmdb_raw`** — a directory-style LMDB with keys `D{i:06d}` (required);
+  `Z{i:06d}` / `Zq{i:06d}` are optional (enable with `with_latent: true`).
   Use this when the dataset is too large to keep resident.
 
 Set `data.format` to `npz` or `lmdb_raw` and `data.train_path` / `data.val_path`
@@ -175,7 +177,8 @@ data:
   # train_loader: { shuffle: true,  drop_last: false }   # per-split overrides
   # val_loader:   { shuffle: false, drop_last: false }
   dataset_args:
-    latent_key: Zq                   # 'Zq' (default) | 'Z' | null — picks `latent_target`
+    # latent_key: null                # null (default) | 'Zq' | 'Z' — set only for
+    #                                  decoder_only mode or latent-space losses
     # target_offset: 0.00390625      # = 1/256 (default). 3GPP/HW bin-midpoint offset
     #                                  applied to reconstruction target only. 0.0 to disable.
 

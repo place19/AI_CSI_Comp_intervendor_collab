@@ -40,8 +40,9 @@ class LmdbRawDataset(Dataset):
         latent_key_prefix:   default "Zq" — keys look like "Zq000000".
         latent_dtype:        on-disk float dtype for the latent ("f4" = float32).
 
-    When `with_latent=True` the lmdb is expected to hold two keys per sample
-    (e.g. b"D000000" and b"Zq000000"), so `len(self)` is `entries // 2`.
+    When `with_latent=True` the lmdb is expected to hold paired latent keys
+    (e.g. b"Zq000000" alongside b"D000000"). `len(self)` counts only keys with
+    the primary prefix so auxiliary key families do not inflate the count.
     """
 
     def __init__(

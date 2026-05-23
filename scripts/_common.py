@@ -32,7 +32,7 @@ def add_common_args(ap: argparse.ArgumentParser) -> None:
         metavar="KEY=VALUE",
         help="override a config key (repeatable)",
     )
-    ap.add_argument("--device", choices=("cpu", "cuda"), default=None)
+    ap.add_argument("--device", choices=("cpu", "cuda", "mps"), default=None)
     ap.add_argument("--gpu-index", type=int, default=None)
     # Output / MLflow naming.
     ap.add_argument(

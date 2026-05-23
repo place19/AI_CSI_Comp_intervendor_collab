@@ -33,11 +33,7 @@ data:
   dataset_args:
     subband: 13
     port: 32
-    # with_latent not required for this mode (loss uses recon, not the Zq target),
-    # but loading it costs almost nothing and lets us inspect drift later.
-    with_latent: true
-    latent_key_prefix: Zq
-    latent_dtype: f4
+    with_latent: false
 
 model:
   encoder:

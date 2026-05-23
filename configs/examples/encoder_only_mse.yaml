@@ -8,9 +8,9 @@ experiment:
     log_every_n_iters: 10
 
 data:
-  # mse_latent uses `latent_target` from the dataset. For an encoder trained
-  # against a pre-quant teacher latent, set latent_key=Z. Otherwise the default
-  # (Zq) targets the post-quant codes.
+  # mse_latent uses `latent_target` from the dataset. latent_key must be set
+  # explicitly (default is null). Use latent_key=Z for a pre-quant teacher
+  # latent, or latent_key=Zq to target the post-quant codes.
   format: npz
   train_path: /path/to/train_dataset.npz
   val_path: /path/to/valid_dataset.npz
