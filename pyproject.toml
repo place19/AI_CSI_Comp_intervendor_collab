@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "csi_comp"
+version = "0.0.1"
+description = "AI-based CSI compression experiments (inter-vendor)"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "numpy",
+    "pyyaml",
+    "mlflow",
+    "lmdb",
+    "onnx",
+    "onnxruntime",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

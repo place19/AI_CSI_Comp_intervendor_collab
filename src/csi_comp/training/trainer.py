@@ -1,0 +1,249 @@
+"""Mode-agnostic training loop with callback hooks."""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+
+from ..losses.composite import WeightedSumLoss
+from ..models import Autoencoder
+from .amp import AmpSpec, autocast_ctx, build_grad_scaler
+from .modes import ModeSpec
+
+
+# ----- batch_to_io: how a raw batch becomes (pred_pack, target_pack) -----
+
+def _batch_to_io(
+    ae: Autoencoder,
+    batch: Dict[str, torch.Tensor],
+    mode_spec: ModeSpec,
+    device: torch.device,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    real = batch["real"].to(device)
+    imag = batch["imag"].to(device)
+    mask = batch["mask"].to(device)
+    # Reconstruction target may differ from encoder input by a bin-midpoint
+    # dequantization offset (3GPP/HW int8 floor convention). Fall back to the
+    # raw input when the dataset doesn't provide a separate target.
+    if "real_target" in batch and "imag_target" in batch:
+        real_t = batch["real_target"].to(device)
+        imag_t = batch["imag_target"].to(device)
+    else:
+        real_t, imag_t = real, imag
+    precoder = torch.stack([real_t, imag_t], dim=-1)  # (B, S, P, 2)
+
+    out: Dict[str, Any] = {}
+    if mode_spec.needs_encoder:
+        out = ae(real, imag)
+    elif mode_spec.needs_decoder:
+        # decoder_only: provided latent goes through decoder directly
+        latent = batch["latent_target"].to(device)
+        recon = ae.decoder(latent) if ae.decoder is not None else None
+        out = {"latent": latent, "quantized_latent": latent, "recon": recon}
+
+    # mask never flows through the model anymore; it's only consumed by the
+    # loss (and only by terms that need it, like one_minus_sgcs).
+    target: Dict[str, Any] = {"precoder": precoder, "mask": mask}
+    if "latent_target" in batch:
+        target["latent_target"] = batch["latent_target"].to(device)
+    return out, target
+
+
+def _to_fp32_pack(pack: Dict[str, Any]) -> Dict[str, Any]:
+    """Cast floating-point tensors in a pred/target pack to fp32 (no copy if
+    already fp32). Used at the autocast boundary before loss / metrics so
+    those computations always run in fp32 regardless of AMP dtype."""
+    out: Dict[str, Any] = {}
+    for k, v in pack.items():
+        if isinstance(v, torch.Tensor) and v.is_floating_point():
+            out[k] = v.float()
+        else:
+            out[k] = v
+    return out
+
+
+# ----- Callback contract -----
+
+class TrainerCallback:
+    """Subclass and override the hooks you care about. All are no-ops by default."""
+
+    def on_train_begin(self, trainer: "Trainer") -> None: ...
+    def on_train_end(self, trainer: "Trainer") -> None: ...
+    def on_epoch_begin(self, trainer: "Trainer", epoch: int) -> None: ...
+    def on_epoch_end(
+        self, trainer: "Trainer", epoch: int, train_metrics: Dict[str, float]
+    ) -> None: ...
+    def on_train_step_end(
+        self, trainer: "Trainer", step: int, metrics: Dict[str, float]
+    ) -> None: ...
+    def on_val_end(
+        self, trainer: "Trainer", epoch: int, val_metrics: Dict[str, float]
+    ) -> None: ...
+
+
+@dataclass
+class Trainer:
+    model: Autoencoder
+    optimizer: torch.optim.Optimizer
+    loss_fn: WeightedSumLoss
+    train_loader: DataLoader
+    val_loader: Optional[DataLoader]
+    mode_spec: ModeSpec
+    device: torch.device
+    epochs: int
+    val_every_n_epochs: int = 1
+    scheduler: Optional[Any] = None
+    callbacks: List[TrainerCallback] = field(default_factory=list)
+    best_metric: dict[str, Any] = field(default_factory=lambda: {"name": "sgcs", "mode": "max"})
+    amp_spec: Optional[AmpSpec] = None
+
+    # Runtime state
+    epoch: int = 0
+    global_step: int = 0
+    best_value: float = float("nan")
+
+    def __post_init__(self):
+        self.model.to(self.device)
+        self.loss_fn.to(self.device)
+        # initialize best_value to ±inf depending on direction
+        if self.best_metric.get("mode", "max") == "max":
+            self.best_value = float("-inf")
+        else:
+            self.best_value = float("inf")
+        self.scaler = build_grad_scaler(self.amp_spec)
+
+    # ----- public API -----
+
+    def fit(self) -> None:
+        self._dispatch("on_train_begin")
+        for epoch in range(self.epoch, self.epochs):
+            self.epoch = epoch
+            self._dispatch("on_epoch_begin", epoch)
+            train_metrics = self._train_one_epoch()
+            self._dispatch("on_epoch_end", epoch, train_metrics)
+            if self.val_loader is not None and (epoch + 1) % self.val_every_n_epochs == 0:
+                val_metrics = self.validate()
+                self._update_best(val_metrics)
+                self._dispatch("on_val_end", epoch, val_metrics)
+            # Epoch-unit schedulers step here. Iter-unit ones already stepped inside the loop.
+            if self.scheduler is not None and getattr(self.scheduler, "step_unit", "epoch") == "epoch":
+                self.scheduler.step()
+        self._dispatch("on_train_end")
+
+    # ----- internals -----
+
+    def _train_one_epoch(self) -> Dict[str, float]:
+        self.model.train()
+        # Frozen submodules stay in eval()
+        for name in self.mode_spec.frozen_inference:
+            getattr(self.model, name).eval()
+
+        totals: Dict[str, float] = {}
+        counts: int = 0
+        for batch in self.train_loader:
+            # Model forward under autocast (when AMP enabled).
+            with autocast_ctx(self.amp_spec):
+                pred_pack, target_pack = _batch_to_io(
+                    self.model, batch, self.mode_spec, self.device
+                )
+            # Loss runs OUTSIDE autocast — fp32 island. Cast any fp tensors back
+            # to fp32 first so the loss never sees half/bf16 inputs.
+            pred_pack = _to_fp32_pack(pred_pack)
+            target_pack = _to_fp32_pack(target_pack)
+
+            self.optimizer.zero_grad(set_to_none=True)
+            total, per_term = self.loss_fn(pred_pack, target_pack)
+            if self.scaler is not None:
+                self.scaler.scale(total).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                total.backward()
+                self.optimizer.step()
+            # Iter-unit schedulers (warmup_cosine, etc.) step after each optimizer step.
+            if self.scheduler is not None and getattr(self.scheduler, "step_unit", "epoch") == "iter":
+                self.scheduler.step()
+            self.global_step += 1
+            step_metrics = self._collect_step_metrics(total, per_term, pred_pack, target_pack)
+            self._dispatch("on_train_step_end", self.global_step, step_metrics)
+            for k, v in step_metrics.items():
+                totals[k] = totals.get(k, 0.0) + v
+            counts += 1
+        return {k: v / max(counts, 1) for k, v in totals.items()}
+
+    @torch.no_grad()
+    def validate(self) -> Dict[str, float]:
+        self.model.eval()
+        totals: Dict[str, float] = {}
+        counts = 0
+        for batch in self.val_loader:  # type: ignore[union-attr]
+            with autocast_ctx(self.amp_spec):
+                pred_pack, target_pack = _batch_to_io(
+                    self.model, batch, self.mode_spec, self.device
+                )
+            # Loss + metrics in fp32, matching the training path.
+            pred_pack = _to_fp32_pack(pred_pack)
+            target_pack = _to_fp32_pack(target_pack)
+            total, per_term = self.loss_fn(pred_pack, target_pack)
+            m = self._collect_step_metrics(total, per_term, pred_pack, target_pack)
+            # `lr` reflects the optimizer state, not the validation batch — drop
+            # it so we don't log a meaningless `val/lr`.
+            for k, v in m.items():
+                if k == "lr" or k.startswith("lr/"):
+                    continue
+                totals[k] = totals.get(k, 0.0) + v
+            counts += 1
+        return {f"val/{k}": v / max(counts, 1) for k, v in totals.items()}
+
+    def _collect_step_metrics(
+        self,
+        total: torch.Tensor,
+        per_term: Dict[str, torch.Tensor],
+        pred_pack: Dict[str, Any],
+        target_pack: Dict[str, Any],
+    ) -> Dict[str, float]:
+        m = {"loss/total": float(total.detach().cpu().item())}
+        for k, v in per_term.items():
+            m[f"loss/{k}"] = float(v.detach().cpu().item())
+        # Surface the optimizer's current LR. The decay/no_decay split (see
+        # builders._split_decay_no_decay) leaves both groups on the same LR
+        # schedule, so a single curve is enough; if a future config wants per-group
+        # LRs this is the place to switch back to logging every group.
+        m["lr"] = float(self.optimizer.param_groups[0]["lr"])
+        # Always log SGCS when the decoder is present, even if it's not the training loss.
+        if pred_pack.get("recon") is not None:
+            if "one_minus_sgcs" in per_term:
+                # Loss term already computed the masked mean SGCS — reuse it.
+                m["sgcs"] = 1.0 - m["loss/one_minus_sgcs"]
+            else:
+                from ..losses.sgcs import sgcs_per_subband
+                recon = pred_pack["recon"]
+                target = target_pack["precoder"]
+                mask = target_pack.get("mask")
+                sgcs = sgcs_per_subband(target, recon)
+                if mask is not None:
+                    sb_valid = mask.any(dim=-1).to(sgcs.dtype)
+                    mean_sgcs = (sgcs * sb_valid).sum() / (sb_valid.sum() + 1e-12)
+                else:
+                    mean_sgcs = sgcs.mean()
+                m["sgcs"] = float(mean_sgcs.detach().cpu().item())
+        return m
+
+    def _update_best(self, val_metrics: Dict[str, float]) -> None:
+        key = f"val/{self.best_metric['name']}"
+        if key not in val_metrics:
+            return
+        v = val_metrics[key]
+        mode = self.best_metric.get("mode", "max")
+        improved = (v > self.best_value) if mode == "max" else (v < self.best_value)
+        if improved:
+            self.best_value = v
+            val_metrics["best/" + self.best_metric["name"]] = v
+
+    def _dispatch(self, method: str, *args, **kwargs) -> None:
+        for cb in self.callbacks:
+            fn: Callable[..., None] = getattr(cb, method)
+            fn(self, *args, **kwargs)

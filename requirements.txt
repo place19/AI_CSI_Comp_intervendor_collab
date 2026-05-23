@@ -1,0 +1,22 @@
+# Runtime dependencies for the csi_comp framework.
+# Tested versions in parentheses (Python 3.11, conda env "torch").
+
+# Core
+torch>=2.1            # tested with 2.12.0; MPS supported on Apple Silicon
+numpy>=1.26           # tested with 2.4.6
+
+# Config
+pyyaml>=6.0           # tested with 6.0.3
+
+# Experiment tracking (optional at runtime — disable via experiment.mlflow.enabled: false)
+mlflow>=2.10          # tested with 3.12.0
+
+# Data storage
+lmdb>=1.4             # tested with 2.2.0
+
+# ONNX export + verification
+onnx>=1.16            # tested with 1.21.0
+onnxruntime>=1.18     # tested with 1.26.0
+
+# Test runner (optional — install with `pip install -e ".[dev]"` instead if preferred)
+pytest>=8.0           # tested with 9.0.3

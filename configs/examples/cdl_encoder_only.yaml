@@ -1,0 +1,92 @@
+# Encoder-only training on real CDL data.
+#
+# The dataset supplies paired (D, Zq) keys via lmdb_raw(with_latent=true);
+# encoder + quantizer are trained so that the quantized latent matches the
+# given Zq target — i.e. the encoder learns to reproduce another vendor's
+# compressed code from the precoder. No decoder is built in this mode.
+experiment:
+  name: cdl_encoder_only
+  seed: 42
+  device: mps
+  log_every_n_iters: 50
+  mlflow:
+    tracking_uri: http://127.0.0.1:5000
+    experiment_name: cdl_csi_compression
+
+data:
+  format: lmdb_raw
+  train_path: ../make_lmdb/train
+  val_path: ../make_lmdb/valid
+  max_subband: 13
+  max_port: 32
+  layout: cnn
+  batch_size: 256
+  num_workers: 0
+  # Optional DataLoader knobs (uncomment / tweak as needed):
+  # pin_memory: false
+  # prefetch_factor: 2            # only honoured when num_workers > 0
+  # persistent_workers: false     # only honoured when num_workers > 0
+  # drop_last: false
+  # train_loader: { shuffle: true,  drop_last: false }   # per-split overrides
+  # val_loader:   { shuffle: false, drop_last: false }
+  dataset_args:
+    subband: 13
+    port: 32
+    with_latent: true
+    latent_key_prefix: Zq
+    latent_dtype: f4
+
+model:
+  encoder:
+    blocks:
+      - { name: dw_sep_conv, out_channels: 16, kernel: 3 }
+      - name: residual
+        main_blocks:
+          - { name: dw_sep_conv, out_channels: 16, kernel: 3 }
+          - { name: dw_sep_conv, out_channels: 16, kernel: 3, use_act2: false }
+        skip_blocks: []
+        post_activation: relu
+      - { name: dw_sep_conv, out_channels: 32, kernel: 3 }
+      - { name: linear_proj, out_dim: 64, activation: relu }
+      - { name: activation, activation: tanh }
+  decoder:
+    blocks: []                       # unused in encoder_only
+    pretrained_path: null
+
+quantizer:
+  type: uniform
+  bits: 2
+  value_range: [-1.0, 1.0]
+  unit_spaced: true
+  grad: ste
+
+training:
+  mode: encoder_only
+  epochs: 5
+  optimizer: { name: adamw, lr: 1.0e-3, weight_decay: 0.01 }
+  scheduler:
+    name: warmup_cosine
+    warmup_steps: 50
+    min_lr: 1.0e-6
+  val_every_n_epochs: 1
+  # MSE is min-better.
+  best_metric: { name: loss/total, mode: min }
+  # Mixed-precision: forward runs under autocast; loss + MHA softmax stay fp32
+  # (fp32 islands) to avoid backprop blow-ups under fp16. To enable, set
+  # enabled: true. dtype defaults: cuda→bf16, mps→fp16, cpu→bf16.
+  amp:
+    enabled: false
+    # dtype: bf16              # bf16 | fp16
+  # torch.compile on encoder/decoder (quantizer stays uncompiled).
+  # Checkpoints stay portable — `_orig_mod.` prefix is stripped on save,
+  # so an inference build without compile loads the same file cleanly.
+  compile:
+    enabled: false
+    # mode: default            # default | reduce-overhead | max-autotune
+    # dynamic: false
+    # fullgraph: false
+
+loss:
+  terms:
+    # Encoder's quantized latent vs the supplied Zq target.
+    - { name: mse_quantized_latent, weight: 1.0 }

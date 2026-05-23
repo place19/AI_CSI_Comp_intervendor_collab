@@ -1,0 +1,90 @@
+# Decoder-only training on real CDL data.
+#
+# Reads paired (D, Zq) keys from ../make_lmdb:
+#   D000000  — int8 precoder bytes,  (S, P, 2)   → divided by 128 to get float32
+#   Zq000000 — float32 latent bytes, (latent_dim,)
+#
+# No encoder / no quantizer is built; the decoder ingests the pre-quantised
+# latent supplied by the dataset and is trained to reconstruct the precoder.
+experiment:
+  name: cdl_decoder_only
+  seed: 42
+  device: mps
+  gpu_index: 0
+  log_every_n_iters: 50
+  mlflow:
+    tracking_uri: http://127.0.0.1:5000
+    experiment_name: cdl_csi_compression
+
+data:
+  format: lmdb_raw
+  train_path: ../make_lmdb/train
+  val_path: ../make_lmdb/valid
+  max_subband: 13
+  max_port: 32
+  layout: cnn                  # only affects encoder layout (unused in decoder_only)
+  batch_size: 256
+  num_workers: 0
+  # Optional DataLoader knobs (uncomment / tweak as needed):
+  # pin_memory: false
+  # prefetch_factor: 2            # only honoured when num_workers > 0
+  # persistent_workers: false     # only honoured when num_workers > 0
+  # drop_last: false
+  # train_loader: { shuffle: true,  drop_last: false }   # per-split overrides
+  # val_loader:   { shuffle: false, drop_last: false }
+  dataset_args:
+    subband: 13
+    port: 32
+    with_latent: true          # tells lmdb_raw to also load Zq{idx:06d}
+    latent_key_prefix: Zq
+    latent_dtype: f4
+
+model:
+  encoder: { blocks: [] }
+  decoder:
+    # Required for decoder_only: tells the decoder its input shape.
+    # latent_dim = 64 (256 bytes ÷ 4 bytes/float32).
+    latent_shape: [64]
+    blocks:
+      - { name: linear_proj, out_dim: 256, activation: relu }
+      - { name: linear_proj, out_dim: 512, activation: relu }
+      - { name: linear_proj, out_dim: "${mul:${data.max_subband},${data.max_port}}", activation: relu }
+      - { name: reshape_head, max_subband: "${data.max_subband}", max_port: "${data.max_port}" }
+    pretrained_path: null
+
+# Quantizer block is unused in decoder_only — but keep a stub for schema completeness.
+quantizer:
+  type: uniform
+  bits: 2
+  value_range: [-1.0, 1.0]
+  unit_spaced: true
+  grad: ste
+
+training:
+  mode: decoder_only
+  epochs: 30
+  optimizer: { name: adamw, lr: 1.0e-3, weight_decay: 0.01 }
+  scheduler:
+    name: warmup_cosine
+    warmup_steps: 200
+    min_lr: 1.0e-6
+  val_every_n_epochs: 1
+  best_metric: { name: sgcs, mode: max }
+  # Mixed-precision: forward runs under autocast; loss + MHA softmax stay fp32
+  # (fp32 islands) to avoid backprop blow-ups under fp16. To enable, set
+  # enabled: true. dtype defaults: cuda→bf16, mps→fp16, cpu→bf16.
+  amp:
+    enabled: false
+    # dtype: bf16              # bf16 | fp16
+  # torch.compile on encoder/decoder (quantizer stays uncompiled).
+  # Checkpoints stay portable — `_orig_mod.` prefix is stripped on save,
+  # so an inference build without compile loads the same file cleanly.
+  compile:
+    enabled: false
+    # mode: default            # default | reduce-overhead | max-autotune
+    # dynamic: false
+    # fullgraph: false
+
+loss:
+  terms:
+    - { name: one_minus_sgcs, weight: 1.0 }

@@ -1,0 +1,45 @@
+# Python bytecode / build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# pytest / mypy / coverage caches
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editable install metadata
+src/*.egg-info/
+
+# MLflow (this project uses the repo dir as the tracking root).
+# Anchor to the repo root so the rules don't also hide src/csi_comp/.../mlruns etc.
+/mlruns/
+/mlartifacts/
+/mlflow.db
+/mlflow.db-journal
+
+# Training outputs
+/outputs/
+
+# Synthetic / experiment data (top-level only — does NOT match src/csi_comp/data/)
+/data/
+
+# Local virtualenvs
+.venv/
+venv/
+
+# OS / editor cruft
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Claude Code local settings + project guidance file
+/.claude/
+/CLAUDE.md

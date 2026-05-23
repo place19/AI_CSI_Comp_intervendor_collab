@@ -1,0 +1,71 @@
+experiment:
+  name: encoder_only_mse
+  seed: 42
+  device: cpu
+  mlflow:
+    tracking_uri: http://127.0.0.1:5000
+    experiment_name: csi_compression
+    log_every_n_iters: 10
+
+data:
+  # mse_latent uses `latent_target` from the dataset. For an encoder trained
+  # against a pre-quant teacher latent, set latent_key=Z. Otherwise the default
+  # (Zq) targets the post-quant codes.
+  format: npz
+  train_path: /path/to/train_dataset.npz
+  val_path: /path/to/valid_dataset.npz
+  max_subband: 13
+  max_port: 32
+  layout: cnn
+  batch_size: 16
+  num_workers: 0
+  # Optional DataLoader knobs (uncomment / tweak as needed):
+  # pin_memory: false
+  # prefetch_factor: 2            # only honoured when num_workers > 0
+  # persistent_workers: false     # only honoured when num_workers > 0
+  # drop_last: false
+  # train_loader: { shuffle: true,  drop_last: false }   # per-split overrides
+  # val_loader:   { shuffle: false, drop_last: false }
+  dataset_args:
+    latent_key: Z
+
+model:
+  encoder:
+    blocks:
+      - { name: cnn_block, channels: 16, kernel: 3 }
+      - { name: linear_proj, out_dim: 16, activation: relu }
+      - { name: activation, activation: tanh }
+  decoder:
+    blocks: []  # unused in encoder_only
+
+quantizer:
+  type: uniform
+  bits: 2
+  value_range: [-1.0, 1.0]
+  unit_spaced: true
+  grad: ste
+
+training:
+  mode: encoder_only
+  epochs: 3
+  optimizer: { name: adam, lr: 1.0e-3 }
+  val_every_n_epochs: 1
+  best_metric: { name: loss/total, mode: min }
+  # Mixed-precision: forward runs under autocast; loss + MHA softmax stay fp32
+  # (fp32 islands) to avoid backprop blow-ups under fp16. To enable, set
+  # enabled: true. dtype defaults: cuda→bf16, mps→fp16, cpu→bf16.
+  amp:
+    enabled: false
+    # dtype: bf16              # bf16 | fp16
+  # torch.compile on encoder/decoder (quantizer stays uncompiled).
+  # Checkpoints stay portable — `_orig_mod.` prefix is stripped on save,
+  # so an inference build without compile loads the same file cleanly.
+  compile:
+    enabled: false
+    # mode: default            # default | reduce-overhead | max-autotune
+    # dynamic: false
+    # fullgraph: false
+
+loss:
+  terms:
+    - { name: mse_latent, weight: 1.0 }

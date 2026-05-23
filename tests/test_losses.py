@@ -1,0 +1,129 @@
+import math
+
+import pytest
+import torch
+
+from csi_comp.losses import (
+    MSELatent,
+    OneMinusSGCS,
+    WeightedSumLoss,
+    sgcs_per_subband,
+)
+
+
+def test_sgcs_identical_inputs_is_one():
+    w = torch.randn(2, 5, 8, 2)
+    sgcs = sgcs_per_subband(w, w)
+    assert torch.allclose(sgcs, torch.ones_like(sgcs), atol=1e-5)
+
+
+def test_sgcs_orthogonal_inputs_is_zero():
+    # Construct w and w_hat that are complex-orthogonal per subband.
+    # w   = (1+0j) along port 0
+    # w_h = (0+0j) along port 0, (1+0j) along port 1
+    w = torch.zeros(1, 1, 2, 2)
+    w_hat = torch.zeros(1, 1, 2, 2)
+    w[0, 0, 0, 0] = 1.0
+    w_hat[0, 0, 1, 0] = 1.0
+    sgcs = sgcs_per_subband(w, w_hat)
+    assert torch.allclose(sgcs, torch.zeros_like(sgcs), atol=1e-6)
+
+
+def test_sgcs_phase_invariance():
+    # SGCS uses |<w, w_hat>|^2 so a global complex phase rotation of w_hat
+    # should leave SGCS unchanged.
+    w = torch.randn(1, 1, 4, 2)
+    # rotate w_hat by phase pi/3
+    cos, sin = math.cos(math.pi / 3), math.sin(math.pi / 3)
+    w_hat_r = cos * w[..., 0] - sin * w[..., 1]
+    w_hat_i = sin * w[..., 0] + cos * w[..., 1]
+    w_hat = torch.stack([w_hat_r, w_hat_i], dim=-1)
+    s1 = sgcs_per_subband(w, w)
+    s2 = sgcs_per_subband(w, w_hat)
+    assert torch.allclose(s1, s2, atol=1e-5)
+
+
+def test_sgcs_bad_shape_raises():
+    with pytest.raises(ValueError):
+        sgcs_per_subband(torch.randn(2, 5, 8, 3), torch.randn(2, 5, 8, 3))
+
+
+def test_one_minus_sgcs_mask_aware():
+    """The padded subbands should not contribute to the mean."""
+    w = torch.randn(2, 4, 8, 2)
+    w_hat = w.clone()
+    # Corrupt subband indices 2,3 of batch 0 — but mask them out.
+    w_hat[0, 2:, :, :] = 0.0
+    mask = torch.zeros(2, 4, 8, dtype=torch.bool)
+    mask[0, :2, :] = True
+    mask[1, :, :] = True
+    loss = OneMinusSGCS()
+    val = loss({"recon": w_hat}, {"precoder": w, "mask": mask}).item()
+    assert val == pytest.approx(0.0, abs=1e-5)
+
+
+def test_one_minus_sgcs_no_mask():
+    w = torch.randn(2, 4, 8, 2)
+    loss = OneMinusSGCS()
+    val = loss({"recon": w}, {"precoder": w}).item()
+    assert val == pytest.approx(0.0, abs=1e-5)
+
+
+def test_mse_latent():
+    pred = torch.randn(4, 16)
+    tgt = pred.clone()
+    loss = MSELatent()
+    assert loss({"latent": pred}, {"latent_target": tgt}).item() == pytest.approx(0.0)
+    assert loss({"latent": torch.zeros(4, 16)}, {"latent_target": torch.ones(4, 16)}).item() == pytest.approx(1.0)
+
+
+def test_weighted_sum_loss_combines():
+    pred = torch.randn(2, 4, 8, 2)
+    target = pred.clone()
+    composite = WeightedSumLoss(
+        [{"name": "one_minus_sgcs", "weight": 2.0}],
+        mode="joint",
+    )
+    total, logs = composite({"recon": pred}, {"precoder": target})
+    assert total.item() == pytest.approx(0.0, abs=1e-5)
+    assert "one_minus_sgcs" in logs
+
+
+def test_weighted_sum_loss_mode_filtering():
+    composite = WeightedSumLoss(
+        [
+            {"name": "one_minus_sgcs", "weight": 1.0, "enabled_when": "joint"},
+            {"name": "mse_latent", "weight": 0.5, "enabled_when": "encoder_only"},
+        ],
+        mode="encoder_only",
+    )
+    # Only the mse_latent term is active
+    assert len(composite.term_modules) == 1
+    assert composite.term_modules[0].name == "mse_latent"
+
+    # And in 'joint' mode only the sgcs term
+    j = WeightedSumLoss(
+        [
+            {"name": "one_minus_sgcs", "weight": 1.0, "enabled_when": "joint"},
+            {"name": "mse_latent", "weight": 0.5, "enabled_when": "encoder_only"},
+        ],
+        mode="joint",
+    )
+    assert len(j.term_modules) == 1
+    assert j.term_modules[0].name == "one_minus_sgcs"
+
+
+def test_weighted_sum_loss_no_terms_raises():
+    with pytest.raises(ValueError):
+        WeightedSumLoss(
+            [{"name": "one_minus_sgcs", "enabled_when": "joint"}],
+            mode="encoder_only",
+        )
+
+
+def test_weighted_sum_loss_enabled_when_list():
+    composite = WeightedSumLoss(
+        [{"name": "one_minus_sgcs", "enabled_when": ["joint", "encoder_only_frozen_decoder"]}],
+        mode="encoder_only_frozen_decoder",
+    )
+    assert len(composite.term_modules) == 1

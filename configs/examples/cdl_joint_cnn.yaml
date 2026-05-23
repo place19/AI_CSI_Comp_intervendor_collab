@@ -1,0 +1,82 @@
+# Joint CNN auto-encoder on the real CDL data in ../make_lmdb.
+# Quick smoke config (3 epochs) — adjust epochs / lr / batch_size for real runs.
+experiment:
+  name: cdl_joint_cnn
+  seed: 42
+  device: cpu
+  gpu_index: 0
+  mlflow:
+    tracking_uri: http://127.0.0.1:5000
+    experiment_name: cdl_csi_compression
+    log_every_n_iters: 50
+
+data:
+  format: lmdb_raw
+  train_path: ../make_lmdb/train
+  val_path: ../make_lmdb/valid
+  max_subband: 13
+  max_port: 32
+  layout: cnn
+  batch_size: 256
+  num_workers: 0
+  # Optional DataLoader knobs (uncomment / tweak as needed):
+  # pin_memory: false
+  # prefetch_factor: 2            # only honoured when num_workers > 0
+  # persistent_workers: false     # only honoured when num_workers > 0
+  # drop_last: false
+  # train_loader: { shuffle: true,  drop_last: false }   # per-split overrides
+  # val_loader:   { shuffle: false, drop_last: false }
+  dataset_args:
+    subband: 13
+    port: 32
+
+model:
+  encoder:
+    blocks:
+      - { name: cnn_block, channels: 16, kernel: 3 }
+      - { name: cnn_block, channels: 32, kernel: 3 }
+      - { name: linear_proj, out_dim: 64, activation: relu }
+      - { name: activation, activation: tanh }
+  decoder:
+    blocks:
+      - { name: linear_proj, out_dim: 256, activation: relu }
+      - { name: linear_proj, out_dim: "${mul:${data.max_subband},${data.max_port}}", activation: relu }
+      - { name: reshape_head, max_subband: "${data.max_subband}", max_port: "${data.max_port}" }
+    pretrained_path: null
+
+quantizer:
+  type: uniform
+  bits: 2
+  value_range: [-1.0, 1.0]
+  unit_spaced: true
+  grad: ste
+
+training:
+  mode: joint
+  epochs: 3
+  optimizer: { name: adam, lr: 1.0e-3 }
+  scheduler:
+    name: warmup_cosine
+    warmup_steps: 200
+    min_lr: 1.0e-6
+    # total_steps defaults to epochs * len(train_loader); set explicitly to override.
+  val_every_n_epochs: 1
+  best_metric: { name: sgcs, mode: max }
+  # Mixed-precision: forward runs under autocast; loss + MHA softmax stay fp32
+  # (fp32 islands) to avoid backprop blow-ups under fp16. To enable, set
+  # enabled: true. dtype defaults: cuda→bf16, mps→fp16, cpu→bf16.
+  amp:
+    enabled: false
+    # dtype: bf16              # bf16 | fp16
+  # torch.compile on encoder/decoder (quantizer stays uncompiled).
+  # Checkpoints stay portable — `_orig_mod.` prefix is stripped on save,
+  # so an inference build without compile loads the same file cleanly.
+  compile:
+    enabled: false
+    # mode: default            # default | reduce-overhead | max-autotune
+    # dynamic: false
+    # fullgraph: false
+
+loss:
+  terms:
+    - { name: one_minus_sgcs, weight: 1.0 }
