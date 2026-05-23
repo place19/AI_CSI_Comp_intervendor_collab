@@ -16,27 +16,38 @@ from .compile_utils import unwrap_compiled
 from .modes import ModeSpec
 
 
-def format_best_filename(epoch: int, metric_name: str, value: float) -> str:
-    """`best_e{epoch:03d}_{metric}{value:.4f}.pt`. Non-finite values fall back
-    to a name without the metric so saving never fails."""
+def _format_checkpoint_filename(prefix: str, epoch: int, metric_name: str, value: float) -> str:
+    """`{prefix}_e{epoch:03d}_{metric}{value:.4f}.pt`. Non-finite values omit
+    the metric so saving never fails."""
     safe_metric = re.sub(r"[^A-Za-z0-9]+", "_", metric_name).strip("_") or "metric"
     if not math.isfinite(value):
-        return f"best_e{int(epoch):03d}.pt"
-    return f"best_e{int(epoch):03d}_{safe_metric}{value:.4f}.pt"
+        return f"{prefix}_e{int(epoch):03d}.pt"
+    return f"{prefix}_e{int(epoch):03d}_{safe_metric}{value:.4f}.pt"
+
+
+def format_best_filename(epoch: int, metric_name: str, value: float) -> str:
+    return _format_checkpoint_filename("best", epoch, metric_name, value)
+
+
+def format_latest_filename(epoch: int, metric_name: str, value: float) -> str:
+    return _format_checkpoint_filename("latest", epoch, metric_name, value)
 
 
 def _link_or_copy(src: Path, dst: Path) -> None:
-    """Replace `dst` with a hardlink to `src` atomically. Falls back to a copy
-    when hardlinking is not available (e.g. cross-filesystem)."""
+    """Replace `dst` with a link to `src` atomically.
+    Order: symlink (relative) → hardlink → copy."""
     src = Path(src)
     dst = Path(dst)
     tmp = dst.with_name(dst.name + ".tmp")
     if tmp.exists() or tmp.is_symlink():
         tmp.unlink()
     try:
-        os.link(src, tmp)
+        os.symlink(src.name, tmp)   # relative symlink: robust to dir moves
     except OSError:
-        shutil.copy2(src, tmp)
+        try:
+            os.link(src, tmp)
+        except OSError:
+            shutil.copy2(src, tmp)
     os.replace(tmp, dst)
 
 
@@ -120,6 +131,7 @@ class CheckpointCallback:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.config = config or {}
         self._prev_best_descriptive: Optional[Path] = None
+        self._prev_latest_descriptive: Optional[Path] = None
 
     def on_train_begin(self, trainer): ...
     def on_epoch_begin(self, trainer, epoch): ...
@@ -130,11 +142,23 @@ class CheckpointCallback:
     def on_epoch_complete(self, trainer, epoch, train_metrics):
         # Fires after validation, best update, and epoch-unit scheduler step so
         # latest.pt captures the fully-updated state and resumes cleanly.
+        metric_name = trainer.best_metric["name"]
+        descriptive = self.out_dir / format_latest_filename(
+            trainer.epoch, metric_name, trainer.best_value
+        )
         save_checkpoint(
-            self.out_dir / "latest.pt", trainer.model, trainer.optimizer,
+            descriptive, trainer.model, trainer.optimizer,
             trainer.scheduler, trainer.epoch, trainer.global_step,
             trainer.best_value, self.config,
         )
+        _link_or_copy(descriptive, self.out_dir / "latest.pt")
+        prev = self._prev_latest_descriptive
+        if prev is not None and prev != descriptive:
+            try:
+                prev.unlink(missing_ok=True)
+            except OSError:
+                pass
+        self._prev_latest_descriptive = descriptive
 
     def on_val_end(self, trainer, epoch, val_metrics):
         improved_key = f"best/{trainer.best_metric['name']}"
