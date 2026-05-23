@@ -102,3 +102,31 @@ def test_build_val_loader_without_train_path(npz_root):
     batch = next(iter(val))
     assert "real" in batch
     assert batch["real"].shape[0] <= 4
+
+
+def test_build_val_loader_ignores_top_level_drop_last(npz_root):
+    """Top-level drop_last=True must not affect build_val_loader (evaluation needs all samples)."""
+    cfg = {
+        "format": "npz",
+        "val_path": str(npz_root / "val.npz"),
+        "max_subband": 8,
+        "max_port": 16,
+        "batch_size": 4,
+        "drop_last": True,  # training convenience — must be ignored by val loader
+    }
+    val = build_val_loader(cfg)
+    assert val.drop_last is False
+
+
+def test_build_val_loader_explicit_drop_last_override(npz_root):
+    """Explicit val_loader.drop_last=True must still be honoured."""
+    cfg = {
+        "format": "npz",
+        "val_path": str(npz_root / "val.npz"),
+        "max_subband": 8,
+        "max_port": 16,
+        "batch_size": 4,
+        "val_loader": {"drop_last": True},
+    }
+    val = build_val_loader(cfg)
+    assert val.drop_last is True

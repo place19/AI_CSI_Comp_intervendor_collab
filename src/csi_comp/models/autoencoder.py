@@ -32,6 +32,11 @@ class Autoencoder(nn.Module):
         real: torch.Tensor,
         imag: torch.Tensor,
     ) -> dict[str, Any]:
+        if self.encoder is None:
+            raise RuntimeError(
+                "Autoencoder.forward() requires an encoder; in decoder_only mode "
+                "the trainer feeds latent_target directly and never calls forward()."
+            )
         latent = self.encoder(real, imag)
         q_latent = self.quantizer(latent) if self.quantizer is not None else latent
         recon = self.decoder(q_latent) if self.decoder is not None else None

@@ -4,8 +4,9 @@ Matches the data produced by `../make_lmdb/make_lmdb.py`:
     key:    f"D{idx:06d}".encode("ascii")    e.g. b"D000000"
     value:  raw int8 bytes of shape (S, P, 2), little-endian, C-order
 
-No __index__ key, no msgpack envelope. The sample count is derived from
-`env.stat()['entries']` and indexing is purely numeric.
+No __index__ key, no msgpack envelope. The sample count is derived by counting
+keys that match the primary prefix (e.g. b"D"), not from env.stat()['entries'],
+so optional Z/Zq entries in the same environment don't inflate the count.
 """
 from __future__ import annotations
 
