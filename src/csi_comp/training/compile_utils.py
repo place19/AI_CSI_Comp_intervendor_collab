@@ -61,9 +61,9 @@ def maybe_compile(
 def compile_autoencoder_inplace(ae: nn.Module, compile_cfg: Optional[dict[str, Any]]) -> None:
     """Apply `maybe_compile` to `ae.encoder` and `ae.decoder` in-place.
 
-    Quantizer is intentionally left uncompiled: its STE backward uses a custom
-    autograd function which interacts poorly with `torch.compile`'s graph
-    capture, and the quantizer is cheap anyway.
+    Quantizer is intentionally left uncompiled: its STE backward uses the
+    `x + (q - x).detach()` trick which interacts poorly with `torch.compile`'s
+    graph capture, and the quantizer is cheap anyway.
     """
     if not compile_cfg or not compile_cfg.get("enabled", False):
         return

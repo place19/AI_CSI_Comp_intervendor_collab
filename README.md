@@ -173,10 +173,11 @@ data:
   # pin_memory: false
   # prefetch_factor: 2               # only honoured when num_workers > 0
   # persistent_workers: false        # only honoured when num_workers > 0
-  # drop_last: false                   # applies to train loader only when using
-  #                                    # build_val_loader (test/infer); val loader
-  #                                    # always defaults to drop_last=false to see
-  #                                    # every sample. Use val_loader.drop_last to override.
+  # drop_last: false                   # train.py (build_dataloaders): applies to both
+  #                                    # train and val loaders as a shared default.
+  #                                    # test.py/infer.py (build_val_loader): ignored for
+  #                                    # the val loader so every sample is evaluated;
+  #                                    # use val_loader.drop_last to override explicitly.
   # train_loader: { shuffle: true,  drop_last: false }   # per-split overrides
   # val_loader:   { shuffle: false, drop_last: false }
   dataset_args:
@@ -214,7 +215,8 @@ model:
   # Omit this block (or set mode: full) to disable.
   # latent_mask:
   #   mode: half          # full | half | dual | random
-  #   mask_ratio: 0.5     # fraction zeroed (trailing); default 0.5
+  #   mask_ratio: 0.5     # fraction zeroed (trailing); default 0.5. At least one
+  #                       # element is always kept (even at mask_ratio=1.0).
 
 quantizer:
   type: uniform
@@ -319,7 +321,7 @@ The same pattern (`@register("losses"|"quantizer"|"dataset"|"scheduler", "...")`
 ## Testing
 
 ```bash
-pytest                # full suite (336 tests)
+pytest                # full suite (337 tests)
 pytest tests/test_amp.py tests/test_compile.py tests/test_onnx_fuse.py -v
 pytest tests/test_latent_mask.py -v   # latent masking unit + integration tests
 ```
@@ -355,7 +357,7 @@ src/csi_comp/
 
 scripts/                 # train.py, test.py, export_onnx.py, infer.py
 configs/                 # examples/
-tests/                   # pytest suite (336 tests)
+tests/                   # pytest suite (337 tests)
 ```
 
 ---

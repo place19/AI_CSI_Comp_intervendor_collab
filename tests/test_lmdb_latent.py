@@ -90,6 +90,31 @@ def test_lmdb_raw_with_latent_counts_only_primary_prefix(tmp_path):
     assert sample["latent_target"].shape == (latent_dim,)
 
 
+def test_lmdb_raw_count_ignores_d_prefixed_metadata_keys(tmp_path):
+    """D-prefixed metadata keys (e.g. b'D_meta') must not inflate len(ds).
+
+    The counter now requires exactly prefix + 6 digits, so any key that doesn't
+    match that pattern (even if it starts with 'D') is silently ignored.
+    """
+    n, S, P = 3, 4, 6
+    path = tmp_path / "db"
+    path.mkdir(parents=True, exist_ok=True)
+    env = lmdb.open(str(path), map_size=8 * 1024 * 1024, subdir=True)
+    rng = np.random.default_rng(42)
+    with env.begin(write=True) as txn:
+        for i in range(n):
+            txn.put(
+                f"D{i:06d}".encode("ascii"),
+                rng.integers(-128, 128, size=(S, P, 2), dtype=np.int8).tobytes(),
+            )
+        # Metadata key with same D prefix — must be ignored by the counter.
+        txn.put(b"D_meta", b"some metadata payload")
+    env.close()
+
+    ds = LmdbRawDataset(root=path, subband=S, port=P)
+    assert len(ds) == n, f"expected {n}, got {len(ds)} — D_meta inflated the count"
+
+
 def test_lmdb_raw_without_latent_counts_primary_only(tmp_path):
     """Default with_latent=False still counts only the primary prefix keys.
     Auxiliary key families (Zq here) in the env are silently ignored — this

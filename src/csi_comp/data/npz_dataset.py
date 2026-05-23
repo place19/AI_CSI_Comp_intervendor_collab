@@ -1,9 +1,9 @@
 """Single-file .npz dataset.
 
-Layout: one .npz file holding three named arrays:
-    D   int (typically int8), shape (N, S, P, 2)  — target CSI (real/imag last)
-    Z   float, shape (N, latent_dim)              — pre-quant encoder output (optional)
-    Zq  float, shape (N, latent_dim)              — post-quant encoder output (optional)
+Layout: one .npz file with D required and Z/Zq optional:
+    D   int (typically int8), shape (N, S, P, 2)  — CSI (real/imag last)  [required]
+    Z   float, shape (N, latent_dim)              — pre-quant encoder output  [optional]
+    Zq  float, shape (N, latent_dim)              — post-quant encoder output  [optional]
 
 The whole file is loaded into RAM at construction (npz is a zip-of-npys; mmap is
 not meaningful here). `D` is kept in its on-disk integer dtype to save memory

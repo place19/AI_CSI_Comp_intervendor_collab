@@ -5,8 +5,8 @@ Matches the data produced by `../make_lmdb/make_lmdb.py`:
     value:  raw int8 bytes of shape (S, P, 2), little-endian, C-order
 
 No __index__ key, no msgpack envelope. The sample count is derived by counting
-keys that match the primary prefix (e.g. b"D"), not from env.stat()['entries'],
-so optional Z/Zq entries in the same environment don't inflate the count.
+keys that match the exact pattern `{prefix}{idx:06d}` (prefix + 6 decimal digits),
+so D-prefixed metadata keys (e.g. "D_meta") don't inflate the count.
 """
 from __future__ import annotations
 
@@ -84,19 +84,25 @@ class LmdbRawDataset(Dataset):
 
     @staticmethod
     def _count_keys_with_prefix(env: lmdb.Environment, prefix: str) -> int:
-        """Walk the env once at init time and count keys whose name starts
-        with `prefix`. Cheap (a few ms for tens of thousands of keys)."""
+        """Walk the env once at init time and count keys matching `prefix` + 6 digits.
+
+        Using the exact `{prefix}{idx:06d}` pattern (rather than startswith) prevents
+        D-prefixed metadata keys (e.g. b"D_meta") from inflating the count.
+        """
         pbytes = prefix.encode("ascii")
+        key_len = len(pbytes) + 6  # e.g. b"D000000" is 7 bytes
         n = 0
         with env.begin(write=False) as txn:
             cur = txn.cursor()
             if not cur.set_range(pbytes):
                 return 0
             while True:
-                k = cur.key()
-                if not bytes(k).startswith(pbytes):
+                k = bytes(cur.key())
+                if not k.startswith(pbytes):
                     break
-                n += 1
+                # Only count keys that match exactly prefix + 6 ASCII digits.
+                if len(k) == key_len and k[len(pbytes):].isdigit():
+                    n += 1
                 if not cur.next():
                     break
         return n

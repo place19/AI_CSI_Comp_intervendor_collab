@@ -25,6 +25,7 @@ def parse_latent_mask_spec(cfg: Optional[dict]) -> Optional[LatentMaskSpec]:
     mask_ratio = float(cfg.get("mask_ratio", 0.5))
     if not (0.0 < mask_ratio <= 1.0):
         raise ValueError(f"latent_mask.mask_ratio must be in (0, 1], got {mask_ratio}")
+    # Note: mask_ratio=1.0 still keeps 1 element (see apply_latent_mask).
     if mode == "full":
         return None  # full mode == no masking; treat as absent
     return LatentMaskSpec(mode=mode, mask_ratio=mask_ratio)
@@ -35,6 +36,7 @@ def apply_latent_mask(q_latent: torch.Tensor, mask_ratio: float) -> torch.Tensor
 
     Works on any shape (B, ...) by flattening to (B, D), masking, then restoring.
     The *first* (1 - mask_ratio) fraction is kept; the rest is set to 0.
+    At least one element is always kept (even when mask_ratio=1.0).
     """
     B = q_latent.shape[0]
     flat = q_latent.reshape(B, -1)
@@ -46,7 +48,10 @@ def apply_latent_mask(q_latent: torch.Tensor, mask_ratio: float) -> torch.Tensor
 
 
 def apply_random_latent_mask(q_latent: torch.Tensor, mask_ratio: float) -> torch.Tensor:
-    """Per-sample random masking: each sample independently has 50% chance to be masked."""
+    """Per-sample random masking: each sample independently has 50% chance to be masked.
+
+    At least one element is always kept when masking is applied (even when mask_ratio=1.0).
+    """
     B = q_latent.shape[0]
     flat = q_latent.reshape(B, -1)
     D = flat.shape[1]
