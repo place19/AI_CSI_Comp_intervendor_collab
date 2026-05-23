@@ -106,9 +106,9 @@ encode the run state — `best_e{epoch:03d}_{metric}{value:.4f}.pt` /
 `latest_e{epoch:03d}_{metric}{value:.4f}.pt` (e.g. `best_e023_sgcs0.8421.pt`)
 — so you can see at a glance which epoch and metric produced each checkpoint
 without opening it. The stable names keep working for downstream scripts
-(`test.py`, `infer.py`, `export_onnx.py`, `resume.py`) at zero extra disk
-cost. On filesystems that refuse symlinks the code falls back to a hardlink,
-then a copy.
+(`test.py`, `infer.py`, `export_onnx.py`, `resume.py`). On filesystems that
+refuse symlinks the code falls back to a hardlink, then a copy (copy uses
+double the disk).
 
 ### 4. Other entry points
 
