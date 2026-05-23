@@ -1,6 +1,6 @@
 """End-to-end smoke tests that exercise the actual CLI scripts via subprocess.
 
-These are slower (a few seconds each) — they ensure the train/test/resume/export
+These are slower (a few seconds each) — they ensure the train/test/pretrained-checkpoint/export
 pipelines hang together correctly on CPU with synthetic data.
 """
 from __future__ import annotations
@@ -182,16 +182,14 @@ def test_infer_limit_caps_samples(workdir):
     assert recon.shape == (2, 6, 10, 2)
 
 
-def test_resume_continues_training(workdir):
-    # Resume and bump epochs to 2 via CLI override. With --no-timestamp the
-    # resume folder is `<name>_resume` (the `_resume` suffix is always
-    # appended by resume.py, regardless of timestamping).
-    _run([PY, str(REPO / "scripts" / "resume.py"),
-          "--checkpoint", str(workdir / "outputs" / "e2e_run" / "latest.pt"),
+def test_pretrained_checkpoint_continues_training(workdir):
+    _run([PY, str(REPO / "scripts" / "train.py"),
+          "--config", str(workdir / "outputs" / "e2e_run" / "config.resolved.yaml"),
+          "--pretrained-checkpoint", str(workdir / "outputs" / "e2e_run" / "latest.pt"),
           "--set", "training.epochs=2",
-          "--out-root", str(workdir / "outputs_resume"),
+          "--out-root", str(workdir / "outputs_pretrained"),
           "--no-timestamp"], cwd=workdir)
-    out = workdir / "outputs_resume" / "e2e_run_resume"
+    out = workdir / "outputs_pretrained" / "e2e_run"
     assert (out / "latest.pt").exists()
 
 

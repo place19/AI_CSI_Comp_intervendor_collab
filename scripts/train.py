@@ -2,6 +2,7 @@
 
     python scripts/train.py --config configs/examples/joint_cnn.yaml
     python scripts/train.py --config <cfg> --set training.epochs=5 --set data.batch_size=8
+    python scripts/train.py --config <cfg> --pretrained-checkpoint outputs/<run>/best.pt
 """
 from __future__ import annotations
 
@@ -20,6 +21,12 @@ def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
     add_common_args(ap)
     ap.add_argument("--out-root", type=Path, default=Path("outputs"))
+    ap.add_argument("--pretrained-checkpoint", type=Path, default=None, metavar="CKPT",
+                    help="load encoder/decoder/quantizer weights from checkpoint before training "
+                         "(optimizer/scheduler/epoch start fresh)")
+    ap.add_argument("--no-strict", action="store_true",
+                    help="use strict=False when loading pretrained weights "
+                         "(allows architecture mismatch; new layers stay randomly initialized)")
     return ap.parse_args()
 
 
@@ -43,7 +50,7 @@ def main() -> int:
         build_optimizer, build_scheduler, compile_autoencoder_inplace,
         configure_device, get_mode_spec, resolve_amp_cfg, seed_everything,
     )
-    from csi_comp.training.checkpoint import CheckpointCallback
+    from csi_comp.training.checkpoint import CheckpointCallback, load_checkpoint
     from csi_comp.training.mlflow_logger import MLflowCallback, MLflowLogger
 
     seed_everything(cfg["experiment"].get("seed", 0))
@@ -52,6 +59,8 @@ def main() -> int:
     mode = cfg["training"]["mode"]
     spec = get_mode_spec(mode)
     ae, enc_trace, dec_trace = build_model(cfg, spec)
+    if args.pretrained_checkpoint is not None:
+        load_checkpoint(args.pretrained_checkpoint, ae, strict=not args.no_strict)
     # Compile encoder/decoder *after* build (and before optimizer construction
     # so the optimizer sees the compiled-module parameters — they share storage
     # with `_orig_mod` so this is a no-op for state but keeps everything tidy).

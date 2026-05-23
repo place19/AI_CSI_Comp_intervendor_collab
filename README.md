@@ -26,7 +26,7 @@ Built around a config-driven, registry-based block system so new encoders/decode
 - **Mixed precision (AMP)**: `training.amp.{enabled, dtype}` wraps the forward in `torch.amp.autocast` for train + val. Two fp32 islands are baked in — loss computation and MHA softmax — to prevent backprop blow-ups seen under naive fp16. `GradScaler` is only constructed for cuda + fp16.
 - **`torch.compile`** (optional): `training.compile.{enabled, mode, dynamic, fullgraph}` compiles encoder and decoder separately (quantizer stays uncompiled — STE backward is hostile to graph capture). Checkpoints save the underlying `_orig_mod` state_dict so disk files load cleanly into compiled or uncompiled inference builds.
 - **ONNX export**: encoder alone, encoder + quantizer, decoder alone, or full autoencoder. Conv↔BN / Linear↔BN1d folds are applied in-place on a deep copy before export (driven by each block's `fusion_pairs` metadata), so the exported graph matches the profiler's "fused inference model" accounting. `--no-fuse` keeps the unfused graph for debugging. Encoder-facing scopes accept a single **`csi`** tensor (CNN: `(1, 2, S, P)` channels `[imag, real]`; Transformer: `(1, S, 2P)` interleaved `[i₀, r₀, i₁, r₁, …]`), bypassing the LayoutAdapter in the exported graph. AMP fp32 casts around MHA softmax are omitted — inference is always fp32.
-- **Reproducibility**: fixed seeds; config + resolved config + checkpoints serialized together so `resume.py` continues bit-identical (modulo non-determinism).
+- **Reproducibility**: fixed seeds; config + resolved config + checkpoints serialized together.
 
 ---
 
@@ -98,23 +98,34 @@ The timestamp suffix (from local time at process start) is also used as the
 MLflow `run_name`, so each invocation gets its own folder/run and prior
 checkpoints are never overwritten. Pass `--no-timestamp` to fall back to the
 plain `outputs/<experiment.name>/` path (handy for tests / stable links).
-`scripts/resume.py` adds `_resume` after the timestamp so a continuation is
-visually distinct.
 
 Both `best.pt` and `latest.pt` are **symlinks** to sibling files whose names
 encode the run state — `best_e{epoch:03d}_{metric}{value:.4f}.pt` /
 `latest_e{epoch:03d}_{metric}{value:.4f}.pt` (e.g. `best_e023_sgcs0.8421.pt`)
 — so you can see at a glance which epoch and metric produced each checkpoint
 without opening it. The stable names keep working for downstream scripts
-(`test.py`, `infer.py`, `export_onnx.py`, `resume.py`). On filesystems that
+(`test.py`, `infer.py`, `export_onnx.py`). On filesystems that
 refuse symlinks the code falls back to a hardlink, then a copy (copy uses
 double the disk).
 
 ### 4. Other entry points
 
 ```bash
-# Resume from a checkpoint (config is embedded; --set overrides still apply)
-python scripts/resume.py --checkpoint outputs/<run>/latest.pt --set training.epochs=60
+# Continue training from a checkpoint (weights only; optimizer/scheduler start fresh)
+python scripts/train.py \
+  --config outputs/<run>/config.resolved.yaml \
+  --pretrained-checkpoint outputs/<run>/latest.pt \
+  --set training.epochs=60
+
+# Continue with a different config (e.g. new loss, scheduler, or added blocks)
+python scripts/train.py \
+  --config configs/examples/new_config.yaml \
+  --pretrained-checkpoint outputs/<run>/best.pt
+
+# Allow architecture mismatch (new blocks start randomly initialized)
+python scripts/train.py \
+  --config configs/examples/new_config.yaml \
+  --pretrained-checkpoint outputs/<run>/best.pt --no-strict
 
 # Evaluate
 python scripts/test.py --checkpoint outputs/<run>/best.pt
@@ -334,7 +345,7 @@ src/csi_comp/
     onnx_export.py       # ONNX export at 4 scopes
     fuse.py              # Conv↔BN / Linear↔BN1d folding for inference
 
-scripts/                 # train.py, resume.py, test.py, export_onnx.py, infer.py
+scripts/                 # train.py, test.py, export_onnx.py, infer.py
 configs/                 # examples/
 tests/                   # pytest suite (331 tests)
 ```

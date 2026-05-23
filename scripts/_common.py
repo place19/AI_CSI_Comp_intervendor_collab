@@ -58,7 +58,7 @@ def resolve_run_name(
     Args:
         base:       experiment name from the config (or a fallback).
         timestamp:  if True, append `_YYYYMMDD_HHMMSS` of the current local time.
-        suffix:     extra suffix appended *after* the timestamp (e.g. "_resume").
+        suffix:     extra suffix appended *after* the timestamp (e.g. "_finetuned").
         now:        seconds-since-epoch override for tests; defaults to time.time().
 
     The returned string is used as both the folder under `--out-root` and the

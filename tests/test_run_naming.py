@@ -24,18 +24,17 @@ def test_with_timestamp_format():
 
 
 def test_suffix_appended_after_timestamp():
-    out = resolve_run_name("base", timestamp=True, suffix="_resume", now=1717000000.0)
-    # Pattern: base_<YYYYMMDD_HHMMSS>_resume
+    out = resolve_run_name("base", timestamp=True, suffix="_finetuned", now=1717000000.0)
     assert out.startswith("base_")
-    assert out.endswith("_resume")
-    middle = out[len("base_") : -len("_resume")]
+    assert out.endswith("_finetuned")
+    middle = out[len("base_") : -len("_finetuned")]
     assert re.fullmatch(r"\d{8}_\d{6}", middle)
 
 
 def test_suffix_without_timestamp():
-    assert resolve_run_name("base", timestamp=False, suffix="_resume") == "base_resume"
+    assert resolve_run_name("base", timestamp=False, suffix="_finetuned") == "base_finetuned"
 
 
 def test_no_double_underscore_when_suffix_starts_with_underscore():
-    out = resolve_run_name("base", timestamp=False, suffix="_resume")
+    out = resolve_run_name("base", timestamp=False, suffix="_finetuned")
     assert "__" not in out
