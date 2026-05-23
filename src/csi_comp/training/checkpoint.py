@@ -172,8 +172,8 @@ class CheckpointCallback:
             descriptive, trainer.model, trainer.optimizer, trainer.scheduler,
             trainer.epoch, trainer.global_step, trainer.best_value, self.config,
         )
-        # best.pt is a hardlink to the descriptive file: stable path for
-        # downstream scripts (test/infer/export/resume), zero extra disk.
+        # best.pt is a symlink (or hardlink/copy as fallback) to the descriptive
+        # file: stable path for downstream scripts (test/infer/export/resume).
         best_path = self.out_dir / "best.pt"
         _link_or_copy(descriptive, best_path)
         # Retire the prior descriptive file once the new best.pt is in place.

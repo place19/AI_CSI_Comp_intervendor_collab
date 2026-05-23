@@ -293,5 +293,6 @@ class Trainer:
 
     def _dispatch(self, method: str, *args, **kwargs) -> None:
         for cb in self.callbacks:
-            fn: Callable[..., None] = getattr(cb, method)
-            fn(self, *args, **kwargs)
+            fn = getattr(cb, method, None)
+            if fn is not None:
+                fn(self, *args, **kwargs)
