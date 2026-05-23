@@ -1,7 +1,6 @@
 """Dump per-sample inference outputs from a trained checkpoint.
 
     python scripts/infer.py \\
-        --config configs/examples/cdl_joint_dwsep_residual.yaml \\
         --checkpoint outputs/<run>/best.pt \\
         --data-path ../make_lmdb/test \\
         --out outputs/<run>/infer_test
@@ -27,9 +26,7 @@ import time
 from pathlib import Path
 from typing import List
 
-from _common import (
-    add_common_args, apply_cli_device, load_resolved_config, set_cuda_visible_early,
-)
+from _common import apply_cli_device, set_cuda_visible_early
 
 
 SAVE_ITEMS = ["recon", "latent", "quant_latent", "original", "mask", "sgcs_per_sample"]
@@ -55,8 +52,17 @@ def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    add_common_args(ap)
     ap.add_argument("--checkpoint", type=Path, required=True)
+    ap.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="override a config key (repeatable)",
+    )
+    ap.add_argument("--device", choices=("cpu", "cuda"), default=None)
+    ap.add_argument("--gpu-index", type=int, default=None)
     ap.add_argument(
         "--data-path", type=Path, default=None,
         help="dataset to run inference on; defaults to data.val_path from the config",
@@ -81,26 +87,30 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    if args.config is None:
-        print("--config is required", file=sys.stderr)
+    import torch
+    from csi_comp.config import apply_overrides, resolve
+
+    sd = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    cfg = sd.get("config")
+    if not cfg:
+        print("checkpoint has no embedded config", file=sys.stderr)
         return 2
 
-    # --data-path is a shortcut for --set data.val_path=...; let CLI --set wins
-    # by appending the data-path override first.
+    # --data-path is a shortcut for --set data.val_path=...; applied before
+    # user --set overrides so explicit --set data.val_path=... wins.
     overrides = []
     if args.data_path is not None:
         overrides.append(f"data.val_path={args.data_path}")
     overrides.extend(args.overrides)
-
-    cfg = load_resolved_config(args.config, overrides)
+    apply_overrides(cfg, overrides)
+    cfg = resolve(cfg)
     apply_cli_device(cfg["experiment"], args)
     set_cuda_visible_early(cfg["experiment"])
 
     save = _parse_save_arg(args.save)
 
-    # Heavy imports after CUDA_VISIBLE_DEVICES is set.
+    # Remaining heavy imports after CUDA_VISIBLE_DEVICES is set.
     import numpy as np
-    import torch
     from csi_comp.losses.sgcs import sgcs_per_subband
     from csi_comp.models.latent_mask import (
         apply_latent_mask, apply_random_latent_mask, parse_latent_mask_spec,
@@ -195,7 +205,6 @@ def main() -> int:
 
     meta: dict = {
         "checkpoint": str(args.checkpoint.resolve()),
-        "config": str(args.config.resolve()),
         "data_path": cfg["data"].get("val_path"),
         "n_samples": int(n_done),
         "device": str(device),

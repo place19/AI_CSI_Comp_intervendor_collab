@@ -118,7 +118,6 @@ def test_train_writes_checkpoints_and_mlflow(workdir):
 
 def test_test_runs_after_train(workdir):
     result = _run([PY, str(REPO / "scripts" / "test.py"),
-                   "--config", str(workdir / "cfg.yaml"),
                    "--checkpoint", str(workdir / "outputs" / "e2e_run" / "best.pt")],
                   cwd=workdir)
     assert "val/sgcs" in result.stdout or "val/loss/total" in result.stdout
@@ -131,7 +130,6 @@ def test_infer_default_save_skips_original(workdir):
 
     out_dir = workdir / "infer_default"
     _run([PY, str(REPO / "scripts" / "infer.py"),
-          "--config", str(workdir / "cfg.yaml"),
           "--checkpoint", str(workdir / "outputs" / "e2e_run" / "best.pt"),
           "--out", str(out_dir)], cwd=workdir)
     # default save list
@@ -152,7 +150,6 @@ def test_infer_save_all_includes_original(workdir):
     """`--save all` adds original.npz to the dumped set."""
     out_dir = workdir / "infer_all"
     _run([PY, str(REPO / "scripts" / "infer.py"),
-          "--config", str(workdir / "cfg.yaml"),
           "--checkpoint", str(workdir / "outputs" / "e2e_run" / "best.pt"),
           "--out", str(out_dir),
           "--save", "all"], cwd=workdir)
@@ -163,7 +160,6 @@ def test_infer_explicit_subset(workdir):
     """`--save recon,sgcs_per_sample` writes exactly that subset."""
     out_dir = workdir / "infer_subset"
     _run([PY, str(REPO / "scripts" / "infer.py"),
-          "--config", str(workdir / "cfg.yaml"),
           "--checkpoint", str(workdir / "outputs" / "e2e_run" / "best.pt"),
           "--out", str(out_dir),
           "--save", "recon,sgcs_per_sample"], cwd=workdir)
@@ -178,7 +174,6 @@ def test_infer_limit_caps_samples(workdir):
     import numpy as np
     out_dir = workdir / "infer_limit"
     _run([PY, str(REPO / "scripts" / "infer.py"),
-          "--config", str(workdir / "cfg.yaml"),
           "--checkpoint", str(workdir / "outputs" / "e2e_run" / "best.pt"),
           "--out", str(out_dir),
           "--save", "recon",

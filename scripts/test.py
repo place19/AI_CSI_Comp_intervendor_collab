@@ -1,6 +1,6 @@
 """Evaluate a checkpoint on the val split.
 
-    python scripts/test.py --config <cfg> --checkpoint outputs/<run>/best.pt
+    python scripts/test.py --checkpoint outputs/<run>/best.pt
 """
 from __future__ import annotations
 
@@ -8,36 +8,47 @@ import argparse
 import sys
 from pathlib import Path
 
-from _common import (
-    add_common_args, apply_cli_device, load_resolved_config, set_cuda_visible_early,
-)
+from _common import apply_cli_device, set_cuda_visible_early
 
 
 def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
-    add_common_args(ap)
     ap.add_argument("--checkpoint", type=Path, required=True)
+    ap.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="override a config key (repeatable)",
+    )
+    ap.add_argument("--device", choices=("cpu", "cuda"), default=None)
+    ap.add_argument("--gpu-index", type=int, default=None)
     return ap.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
-    if args.config is None:
-        print("--config is required", file=sys.stderr)
-        return 2
-    cfg = load_resolved_config(args.config, args.overrides)
-    apply_cli_device(cfg["experiment"], args)
-    set_cuda_visible_early(cfg["experiment"])
-
     import torch
+    from csi_comp.config import apply_overrides, resolve
     from csi_comp.losses.composite import WeightedSumLoss
     from csi_comp.models.latent_mask import parse_latent_mask_spec
     from csi_comp.training import (
-        Trainer, build_dataloaders, build_model, build_optimizer,
+        Trainer, build_dataloaders, build_model,
         compile_autoencoder_inplace, configure_device, get_mode_spec,
         resolve_amp_cfg, seed_everything,
     )
     from csi_comp.training.checkpoint import load_checkpoint
+
+    sd = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    cfg = sd.get("config")
+    if not cfg:
+        print("checkpoint has no embedded config", file=sys.stderr)
+        return 2
+    apply_overrides(cfg, args.overrides)
+    cfg = resolve(cfg)
+    apply_cli_device(cfg["experiment"], args)
+    set_cuda_visible_early(cfg["experiment"])
 
     seed_everything(cfg["experiment"].get("seed", 0))
     device = configure_device(cfg["experiment"])
@@ -53,7 +64,11 @@ def main() -> int:
     _, val_loader = build_dataloaders(cfg["data"])
     loss_fn = WeightedSumLoss(cfg["loss"]["terms"], mode=mode)
     # No-op optimizer to satisfy the Trainer constructor.
-    optimizer = torch.optim.SGD([p for p in ae.parameters() if p.requires_grad] or [torch.zeros(1, requires_grad=True)], lr=0.0)
+    optimizer = torch.optim.SGD(
+        [p for p in ae.parameters() if p.requires_grad]
+        or [torch.zeros(1, requires_grad=True)],
+        lr=0.0,
+    )
 
     trainer = Trainer(
         model=ae, optimizer=optimizer, loss_fn=loss_fn,
