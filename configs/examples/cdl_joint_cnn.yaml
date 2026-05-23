@@ -12,8 +12,8 @@ experiment:
 
 data:
   format: lmdb_raw
-  train_path: ../make_lmdb/train
-  val_path: ../make_lmdb/valid
+  train_path: /path/to/train_lmdb
+  val_path: /path/to/valid_lmdb
   max_subband: 13
   max_port: 32
   layout: cnn
