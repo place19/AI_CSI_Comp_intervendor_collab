@@ -54,13 +54,12 @@ def test_dataloader_yields_expected_batch():
 def test_npz_shapes_and_latents():
     from csi_comp.data import NpzDataset
 
-    ds = NpzDataset(REAL_ROOT / "train_dataset.npz")
+    ds = NpzDataset(REAL_ROOT / "train_dataset.npz", latent_key="Zq")
     s = ds[0]
     assert s["true_shape"] == (13, 32)
     assert s["real"].shape == (13, 32)
     assert s["real"].dtype == torch.float32
     assert s["real"].abs().max().item() < 1.0
-    # default exposes both latent_target (Zq) and latent_target_z (Z)
     assert "latent_target" in s
     assert "latent_target_z" in s
     assert s["latent_target"].dtype == torch.float32

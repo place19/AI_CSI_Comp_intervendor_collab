@@ -47,15 +47,10 @@ def test_npz_dataset_custom_target_offset(npz_root):
     assert torch.allclose(sample["real_target"], sample["real"] + 0.01)
 
 
-def test_npz_dataset_with_latent_default_is_zq(npz_root):
+def test_npz_dataset_default_has_no_latent(npz_root):
     ds = NpzDataset(npz_root / "train.npz")
     sample = ds[0]
-    assert "latent_target" in sample
-    assert sample["latent_target"].shape == (16,)
-    assert sample["latent_target"].dtype == torch.float32
-    # default also exposes Z as latent_target_z
-    assert "latent_target_z" in sample
-    assert sample["latent_target_z"].shape == (16,)
+    assert "latent_target" not in sample
 
 
 def test_npz_dataset_latent_key_z(npz_root):
@@ -170,7 +165,7 @@ def test_collate_latent_z_all_or_none():
 
 
 def test_dataloader_end_to_end(npz_root):
-    ds = NpzDataset(npz_root / "train.npz")
+    ds = NpzDataset(npz_root / "train.npz", latent_key="Zq")
     loader = DataLoader(
         ds, batch_size=4, shuffle=False, collate_fn=make_collate_fn(8, 16)
     )

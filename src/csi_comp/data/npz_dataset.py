@@ -37,8 +37,10 @@ class NpzDataset(Dataset):
                         input keeps the raw `int*scale` convention so the model
                         sees what HW actually produces.
         latent_key:     which array becomes `latent_target` in each sample. One of
-                        "Zq" (default, post-quant), "Z" (pre-quant), or None
-                        (do not emit `latent_target`).
+                        None (default, do not emit `latent_target`), "Zq"
+                        (post-quant), or "Z" (pre-quant). Set to "Zq" or "Z"
+                        only when `latent_target` is actually consumed (e.g.
+                        `decoder_only` mode or `mse_latent` loss).
         also_expose_z:  if True and `Z` is present, every sample also carries
                         `latent_target_z` (float32) — for losses that want the
                         un-quantized teacher latent alongside whatever
@@ -50,7 +52,7 @@ class NpzDataset(Dataset):
         path: str | Path,
         scale: float = _DEFAULT_SCALE,
         target_offset: float = _DEFAULT_TARGET_OFFSET,
-        latent_key: Optional[str] = "Zq",
+        latent_key: Optional[str] = None,
         also_expose_z: bool = True,
     ):
         self.path = Path(path)

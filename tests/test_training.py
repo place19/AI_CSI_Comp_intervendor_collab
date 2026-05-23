@@ -47,9 +47,9 @@ def _cfg(mode: str, with_latent_shape: tuple[int, ...] | None = None):
     return cfg
 
 
-def _loaders(npz_root: Path, batch_size: int = 4):
-    train = NpzDataset(npz_root / "train.npz")
-    val = NpzDataset(npz_root / "val.npz")
+def _loaders(npz_root: Path, batch_size: int = 4, latent_key: str = "Zq"):
+    train = NpzDataset(npz_root / "train.npz", latent_key=latent_key)
+    val = NpzDataset(npz_root / "val.npz", latent_key=latent_key)
     coll = make_collate_fn(MAX_S, MAX_P)
     return (
         DataLoader(train, batch_size=batch_size, shuffle=False, collate_fn=coll),

@@ -20,7 +20,7 @@ Built around a config-driven, registry-based block system so new encoders/decode
 - **Training UX**:
   - **Console**: always-on stdout progress (epoch/step/loss/SGCS/LR), throttled to a windowed mean.
   - **MLflow** (optional): windowed-mean train metrics, **epoch-indexed validation metrics**, per-run note with full config + per-block FLOPs/params/output shapes, resolved-config artifact. Checkpoints are NOT uploaded — they live only in `outputs/<run>/`.
-- **Devices**: `cpu`, `cuda` (selected via `CUDA_VISIBLE_DEVICES`), `mps` (Apple Silicon).
+- **Devices**: `cpu`, `cuda` (selected via `CUDA_VISIBLE_DEVICES`), `mps` (Apple Silicon). For `test.py` / `infer.py`, `gpu_index` embedded in the checkpoint config cannot be applied before `torch.load()` — pass `--device cuda --gpu-index N` on the CLI to select a specific GPU with these scripts.
 - **Data formats**: raw int8 LMDB (`lmdb_raw`) and single-file `.npz` (`npz`) with keys `D`/`Z`/`Zq`. Datasets emit a separate `real_target`/`imag_target` pair offset by `target_offset` (default `1/256`) to model the 3GPP/HW int8 floor-quantization bin midpoint.
 - **DataLoader knobs from YAML**: `num_workers`, `pin_memory`, `prefetch_factor`, `persistent_workers`, `drop_last` plus per-split `train_loader` / `val_loader` overrides.
 - **Mixed precision (AMP)**: `training.amp.{enabled, dtype}` wraps the forward in `torch.amp.autocast` for train + val. Two fp32 islands are baked in — loss computation and MHA softmax — to prevent backprop blow-ups seen under naive fp16. `GradScaler` is only constructed for cuda + fp16.
