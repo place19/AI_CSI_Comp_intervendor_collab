@@ -12,7 +12,7 @@ Built around a config-driven, registry-based block system so new encoders/decode
 - **Registry-based blocks**: CNN, depthwise-separable conv, residual, average pooling, transformer (custom Q/K/V/O with selectable pre/post-LN), positional encoding (fixed sin/cos · learnable random · learnable sin/cos), reshape, linear projection, standalone activation, bounding head, reshape head, complex FFN head (per-branch real/imag projections). Add a new block with a single `@register("block", "name")` decorator.
 - **Fixed-shape forward contract**: every block declares `out_shape` in `__init__` and has a single `forward(x) -> x` signature; the encoder/decoder builder propagates shapes statically. Padding masks live only on the data batch and are consumed by the loss — not threaded through the model.
 - **Configurable quantizer**: uniform quantization with pluggable gradient strategies (STE / soft / hard). Bit-width, range, and level spacing all configurable.
-- **Composite loss**: weighted sum of named loss terms (`one_minus_sgcs`, `mse_latent`, `mse_quant_latent`, `dual_one_minus_sgcs`, …). Add new terms via the loss registry.
+- **Composite loss**: weighted sum of named loss terms (`one_minus_sgcs`, `mse_latent`, `mse_quantized_latent`, `dual_one_minus_sgcs`, …). Add new terms via the loss registry.
 - **Latent masking** (`model.latent_mask`): zero out the trailing fraction of the quantized latent before the decoder to simulate partial-bandwidth scenarios. Four modes: `full` (disabled), `half` (fixed), `random` (per-sample augmentation), `dual` (decoder called twice; loss is a weighted sum of full- and half-latent reconstructions). Independent of `training.mode`; applies to both training and validation.
 - **Schedulers**: PyTorch built-ins (`cosine`, `step`, `none`) plus a custom `warmup_cosine` (linear warmup → cosine annealing, iteration-unit).
 - **Optimizer hygiene**: AdamW/Adam/SGD split params into decay and no-decay groups (LayerNorm + bias excluded by default, GPT-2/BERT convention).
@@ -60,7 +60,7 @@ The framework reads two on-disk formats:
 
 - **`npz`** — a single `.npz` file with three arrays: `D` (int8 `(N, S, P, 2)` CSI),
   `Z` (float32 `(N, latent_dim)` pre-quant latent), `Zq` (post-quant latent).
-  Build with e.g. `../make_lmdb/make_npz.py`. Loaded fully into RAM.
+  Loaded fully into RAM.
 - **`lmdb_raw`** — a directory-style LMDB with keys `D{i:06d}` / `Z{i:06d}` / `Zq{i:06d}`.
   Use this when the dataset is too large to keep resident.
 
@@ -296,7 +296,7 @@ The same pattern (`@register("losses"|"quantizer"|"dataset"|"scheduler", "...")`
 ## Testing
 
 ```bash
-pytest                # full suite (331 tests)
+pytest                # full suite (322 tests)
 pytest tests/test_amp.py tests/test_compile.py tests/test_onnx_fuse.py -v
 pytest tests/test_latent_mask.py -v   # latent masking unit + integration tests
 ```
@@ -331,8 +331,8 @@ src/csi_comp/
     fuse.py              # Conv↔BN / Linear↔BN1d folding for inference
 
 scripts/                 # train.py, resume.py, test.py, export_onnx.py, infer.py
-configs/                 # CNN_Res_TF_Dec.yaml + examples/
-tests/                   # pytest suite (296 tests)
+configs/                 # examples/
+tests/                   # pytest suite (322 tests)
 ```
 
 ---

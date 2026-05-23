@@ -1,4 +1,4 @@
-# Joint CNN auto-encoder on the real CDL data in ../make_lmdb.
+# Joint CNN auto-encoder on the real CDL data.
 # Quick smoke config (3 epochs) — adjust epochs / lr / batch_size for real runs.
 experiment:
   name: cdl_joint_cnn

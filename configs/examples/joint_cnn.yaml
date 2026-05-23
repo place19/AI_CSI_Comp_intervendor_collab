@@ -10,7 +10,7 @@ experiment:
 
 data:
   # Single-file npz with keys D (int8 (N, S, P, 2)), Z (pre-quant latent),
-  # Zq (post-quant latent). Build with e.g. ../make_lmdb/make_npz.py.
+  # Zq (post-quant latent).
   format: npz
   train_path: /path/to/train_dataset.npz
   val_path: /path/to/valid_dataset.npz

@@ -1,6 +1,6 @@
 # Decoder-only training on real CDL data.
 #
-# Reads paired (D, Zq) keys from ../make_lmdb:
+# Reads paired (D, Zq) keys from the LMDB dataset:
 #   D000000  — int8 precoder bytes,  (S, P, 2)   → divided by 128 to get float32
 #   Zq000000 — float32 latent bytes, (latent_dim,)
 #
