@@ -35,7 +35,7 @@ def main() -> int:
     from csi_comp.losses.composite import WeightedSumLoss
     from csi_comp.models.latent_mask import parse_latent_mask_spec
     from csi_comp.training import (
-        Trainer, build_dataloaders, build_model,
+        Trainer, build_val_loader, build_model,
         compile_autoencoder_inplace, configure_device, get_mode_spec,
         resolve_amp_cfg, seed_everything,
     )
@@ -62,7 +62,7 @@ def main() -> int:
     amp_spec = resolve_amp_cfg(cfg["training"].get("amp"), device)
     mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))
 
-    _, val_loader = build_dataloaders(cfg["data"])
+    val_loader = build_val_loader(cfg["data"])
     loss_fn = WeightedSumLoss(cfg["loss"]["terms"], mode=mode)
     # No-op optimizer to satisfy the Trainer constructor.
     optimizer = torch.optim.SGD(

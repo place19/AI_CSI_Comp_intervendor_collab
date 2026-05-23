@@ -40,14 +40,19 @@ class DualOneMinusSGCS(nn.Module):
         target = target_pack["precoder"]
         mask = target_pack.get("mask")
 
-        sgcs_full = sgcs_per_subband(target, recon_full, eps=self.eps)
-        sgcs_half = sgcs_per_subband(target, recon_half, eps=self.eps)
-
         if mask is not None:
+            mask4d = mask.unsqueeze(-1)                              # (B, S, P, 1)
+            target     = target     * mask4d
+            recon_full = recon_full * mask4d
+            recon_half = recon_half * mask4d
+            sgcs_full = sgcs_per_subband(target, recon_full, eps=self.eps)
+            sgcs_half = sgcs_per_subband(target, recon_half, eps=self.eps)
             sb_valid = mask.any(dim=-1)
             mean_full = _masked_mean(sgcs_full, sb_valid, self.eps)
             mean_half = _masked_mean(sgcs_half, sb_valid, self.eps)
         else:
+            sgcs_full = sgcs_per_subband(target, recon_full, eps=self.eps)
+            sgcs_half = sgcs_per_subband(target, recon_half, eps=self.eps)
             mean_full = sgcs_full.mean()
             mean_half = sgcs_half.mean()
 

@@ -117,7 +117,7 @@ def main() -> int:
         apply_latent_mask, apply_random_latent_mask, parse_latent_mask_spec,
     )
     from csi_comp.training import (
-        build_dataloaders, build_model, compile_autoencoder_inplace,
+        build_val_loader, build_model, compile_autoencoder_inplace,
         configure_device, get_mode_spec, seed_everything,
     )
     from csi_comp.training.checkpoint import load_checkpoint
@@ -133,7 +133,7 @@ def main() -> int:
     ae.to(device).eval()
     mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))
 
-    _, val_loader = build_dataloaders(cfg["data"])
+    val_loader = build_val_loader(cfg["data"])
 
     out_dir = args.out or (args.checkpoint.parent / f"infer_{int(time.time())}")
     out_dir = Path(out_dir)
@@ -196,8 +196,9 @@ def main() -> int:
                 real_t = batch.get("real_target", batch["real"]).to(device)
                 imag_t = batch.get("imag_target", batch["imag"]).to(device)
                 precoder_t = torch.stack([real_t, imag_t], dim=-1)
-                sgcs_sb = sgcs_per_subband(precoder_t, recon)       # (B, S)
-                sb_valid = mask.any(dim=-1).to(sgcs_sb.dtype)        # (B, S)
+                mask4d = mask.unsqueeze(-1)
+                sgcs_sb = sgcs_per_subband(precoder_t * mask4d, recon * mask4d)  # (B, S)
+                sb_valid = mask.any(dim=-1).to(sgcs_sb.dtype)                     # (B, S)
                 denom = sb_valid.sum(dim=1).clamp(min=1.0)
                 sample_sgcs = (sgcs_sb * sb_valid).sum(dim=1) / denom
                 buffers["sgcs_per_sample"].append(sample_sgcs[:take].cpu().numpy())

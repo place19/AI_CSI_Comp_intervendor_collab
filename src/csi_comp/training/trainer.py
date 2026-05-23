@@ -262,11 +262,13 @@ class Trainer:
                 recon = pred_pack["recon"]
                 target = target_pack["precoder"]
                 mask = target_pack.get("mask")
-                sgcs = sgcs_per_subband(target, recon)
                 if mask is not None:
+                    mask4d = mask.unsqueeze(-1)
+                    sgcs = sgcs_per_subband(target * mask4d, recon * mask4d)
                     sb_valid = mask.any(dim=-1).to(sgcs.dtype)
                     mean_sgcs = (sgcs * sb_valid).sum() / (sb_valid.sum() + 1e-12)
                 else:
+                    sgcs = sgcs_per_subband(target, recon)
                     mean_sgcs = sgcs.mean()
                 m["sgcs"] = float(mean_sgcs.detach().cpu().item())
         return m

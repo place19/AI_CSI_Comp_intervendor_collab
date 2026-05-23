@@ -59,10 +59,14 @@ class OneMinusSGCS(nn.Module):
         target = target_pack["precoder"]                # (B, S, P, 2)
         mask: Optional[torch.Tensor] = target_pack.get("mask")  # (B, S, P) bool
 
-        sgcs = sgcs_per_subband(target, recon, eps=self.eps)    # (B, S)
         if mask is not None:
-            sb_valid = mask.any(dim=-1)                         # (B, S) bool
+            mask4d = mask.unsqueeze(-1)                         # (B, S, P, 1)
+            target = target * mask4d
+            recon  = recon  * mask4d
+            sgcs = sgcs_per_subband(target, recon, eps=self.eps)  # (B, S)
+            sb_valid = mask.any(dim=-1)                           # (B, S) bool
             mean_sgcs = _masked_mean(sgcs, sb_valid, self.eps)
         else:
+            sgcs = sgcs_per_subband(target, recon, eps=self.eps)
             mean_sgcs = sgcs.mean()
         return 1.0 - mean_sgcs

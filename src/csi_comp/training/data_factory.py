@@ -68,6 +68,21 @@ def _loader_kwargs(loader_cfg: dict[str, Any] | None, *, defaults: dict[str, Any
     return kw
 
 
+def build_val_loader(data_cfg: dict[str, Any]) -> DataLoader:
+    """Build only the val DataLoader — use in test/infer scripts where train data is not needed."""
+    fmt = data_cfg["format"]
+    cls = reg_get("dataset", fmt)
+    extra: dict[str, Any] = filter_kwargs(cls.__init__, dict(data_cfg.get("dataset_args", {}) or {}))
+    val_ds = cls(data_cfg["val_path"], **extra)
+    coll = make_collate_fn(int(data_cfg["max_subband"]), int(data_cfg["max_port"]))
+    common: dict[str, Any] = {k: data_cfg[k] for k in _LOADER_KEYS if k in data_cfg}
+    val_kw = _loader_kwargs(
+        data_cfg.get("val_loader"),
+        defaults={**common, "shuffle": False},
+    )
+    return DataLoader(val_ds, collate_fn=coll, **val_kw)
+
+
 def build_dataloaders(data_cfg: dict[str, Any]) -> tuple[DataLoader, DataLoader]:
     fmt = data_cfg["format"]
     cls = reg_get("dataset", fmt)
