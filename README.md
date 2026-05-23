@@ -246,10 +246,12 @@ training:
 loss:
   terms:
     - { name: one_minus_sgcs, weight: 1.0 }
-    # For latent_mask.mode: dual, use dual_one_minus_sgcs instead:
+    # For latent_mask.mode: dual, use dual_one_minus_sgcs instead and set
+    # best_metric to loss/total (val/sgcs only tracks the full-latent path):
     # - name: dual_one_minus_sgcs
     #   weight: 1.0
     #   params: { full_weight: 0.5, half_weight: 0.5 }
+    # training.best_metric: { name: loss/total, mode: min }
 ```
 
 ### CLI overrides
@@ -314,7 +316,7 @@ The same pattern (`@register("losses"|"quantizer"|"dataset"|"scheduler", "...")`
 ## Testing
 
 ```bash
-pytest                # full suite (331 tests)
+pytest                # full suite (334 tests)
 pytest tests/test_amp.py tests/test_compile.py tests/test_onnx_fuse.py -v
 pytest tests/test_latent_mask.py -v   # latent masking unit + integration tests
 ```
@@ -350,7 +352,7 @@ src/csi_comp/
 
 scripts/                 # train.py, test.py, export_onnx.py, infer.py
 configs/                 # examples/
-tests/                   # pytest suite (331 tests)
+tests/                   # pytest suite (334 tests)
 ```
 
 ---

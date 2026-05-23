@@ -102,6 +102,14 @@ def test_build_model_decoder_only_requires_latent_shape():
     assert ae.quantizer is None
 
 
+def test_build_model_empty_encoder_blocks_raises():
+    cfg = _cfg("joint")
+    cfg["model"]["encoder"]["blocks"] = []
+    spec = get_mode_spec("joint")
+    with pytest.raises(ValueError, match="empty"):
+        build_model(cfg, spec)
+
+
 def test_trainer_joint_one_epoch_improves_loss(npz_root):
     seed_everything(0)
     cfg = _cfg("joint")
