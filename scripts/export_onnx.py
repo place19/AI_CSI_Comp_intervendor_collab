@@ -52,10 +52,17 @@ def main() -> int:
         print("checkpoint missing embedded config", file=sys.stderr)
         return 2
 
-    # Force joint mode for export so we can build encoder + quantizer + decoder.
+    # Choose the minimum build mode for the requested scopes.
+    # Forcing joint unconditionally fails for encoder_only checkpoints whose
+    # decoder.blocks is empty (build_decoder raises on the terminal-shape check).
+    # Use encoder_only when the checkpoint was trained that way and no decoder
+    # scope is being exported.
+    original_mode = cfg.get("training", {}).get("mode", "joint")
+    needs_decoder_scope = any(s in ("decoder", "full") for s in scopes)
+    build_mode = "joint" if (original_mode != "encoder_only" or needs_decoder_scope) else "encoder_only"
     cfg = dict(cfg)
-    cfg.setdefault("training", {})["mode"] = "joint"
-    spec = get_mode_spec("joint")
+    cfg.setdefault("training", {})["mode"] = build_mode
+    spec = get_mode_spec(build_mode)
     ae, _, _ = build_model(cfg, spec)
     load_checkpoint(args.checkpoint, ae, optimizer=None, scheduler=None, strict=False)
 

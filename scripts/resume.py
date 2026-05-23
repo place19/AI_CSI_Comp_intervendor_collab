@@ -122,6 +122,9 @@ def main() -> int:
             amp_spec=amp_spec,
             mask_spec=mask_spec,
         )
+        import math
+        if math.isfinite(restored.best_value):
+            trainer.best_value = restored.best_value
         trainer.epoch = restored.epoch + 1
         trainer.global_step = restored.global_step
         trainer.fit()

@@ -114,6 +114,10 @@ class TrainerCallback:
         self, trainer: "Trainer", epoch: int, val_metrics: Dict[str, float]
     ) -> None: ...
 
+    def on_epoch_complete(
+        self, trainer: "Trainer", epoch: int, train_metrics: Dict[str, float]
+    ) -> None: ...
+
 
 @dataclass
 class Trainer:
@@ -163,6 +167,9 @@ class Trainer:
             # Epoch-unit schedulers step here. Iter-unit ones already stepped inside the loop.
             if self.scheduler is not None and getattr(self.scheduler, "step_unit", "epoch") == "epoch":
                 self.scheduler.step()
+            # on_epoch_complete fires after validation, best update, and scheduler step so
+            # that latest.pt captures the fully-updated state for clean resume.
+            self._dispatch("on_epoch_complete", epoch, train_metrics)
         self._dispatch("on_train_end")
 
     # ----- internals -----
@@ -265,8 +272,17 @@ class Trainer:
         return m
 
     def _update_best(self, val_metrics: Dict[str, float]) -> None:
+        import warnings
         key = f"val/{self.best_metric['name']}"
         if key not in val_metrics:
+            warnings.warn(
+                f"best_metric key {key!r} not found in val_metrics "
+                f"(available: {sorted(val_metrics)}). "
+                f"best.pt will never be saved. "
+                f"Set training.best_metric to a key that appears in your loss terms.",
+                UserWarning,
+                stacklevel=2,
+            )
             return
         v = val_metrics[key]
         mode = self.best_metric.get("mode", "max")

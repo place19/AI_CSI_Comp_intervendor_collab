@@ -125,7 +125,11 @@ class CheckpointCallback:
     def on_epoch_begin(self, trainer, epoch): ...
     def on_train_step_end(self, trainer, step, metrics): ...
 
-    def on_epoch_end(self, trainer, epoch, train_metrics):
+    def on_epoch_end(self, trainer, epoch, train_metrics): ...
+
+    def on_epoch_complete(self, trainer, epoch, train_metrics):
+        # Fires after validation, best update, and epoch-unit scheduler step so
+        # latest.pt captures the fully-updated state and resumes cleanly.
         save_checkpoint(
             self.out_dir / "latest.pt", trainer.model, trainer.optimizer,
             trainer.scheduler, trainer.epoch, trainer.global_step,

@@ -31,6 +31,7 @@ def main() -> int:
 
     import torch
     from csi_comp.losses.composite import WeightedSumLoss
+    from csi_comp.models.latent_mask import parse_latent_mask_spec
     from csi_comp.training import (
         Trainer, build_dataloaders, build_model, build_optimizer,
         compile_autoencoder_inplace, configure_device, get_mode_spec,
@@ -47,6 +48,7 @@ def main() -> int:
     load_checkpoint(args.checkpoint, ae, optimizer=None, scheduler=None, strict=False)
     compile_autoencoder_inplace(ae, cfg["training"].get("compile"))
     amp_spec = resolve_amp_cfg(cfg["training"].get("amp"), device)
+    mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))
 
     _, val_loader = build_dataloaders(cfg["data"])
     loss_fn = WeightedSumLoss(cfg["loss"]["terms"], mode=mode)
@@ -60,6 +62,7 @@ def main() -> int:
         epochs=0,
         best_metric=cfg["training"].get("best_metric", {"name": "sgcs", "mode": "max"}),
         amp_spec=amp_spec,
+        mask_spec=mask_spec,
     )
     val_metrics = trainer.validate()
     for k, v in sorted(val_metrics.items()):

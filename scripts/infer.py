@@ -102,6 +102,9 @@ def main() -> int:
     import numpy as np
     import torch
     from csi_comp.losses.sgcs import sgcs_per_subband
+    from csi_comp.models.latent_mask import (
+        apply_latent_mask, apply_random_latent_mask, parse_latent_mask_spec,
+    )
     from csi_comp.training import (
         build_dataloaders, build_model, compile_autoencoder_inplace,
         configure_device, get_mode_spec, seed_everything,
@@ -117,6 +120,7 @@ def main() -> int:
     load_checkpoint(args.checkpoint, ae, optimizer=None, scheduler=None, strict=False)
     compile_autoencoder_inplace(ae, cfg["training"].get("compile"))
     ae.to(device).eval()
+    mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))
 
     _, val_loader = build_dataloaders(cfg["data"])
 
@@ -134,7 +138,19 @@ def main() -> int:
             real = batch["real"].to(device)
             imag = batch["imag"].to(device)
             mask = batch["mask"].to(device)
-            out = ae(real, imag)
+            latent = ae.encoder(real, imag)
+            q_latent = ae.quantizer(latent) if ae.quantizer is not None else latent
+            if mask_spec is not None and ae.decoder is not None:
+                if mask_spec.mode == "half":
+                    decoder_input = apply_latent_mask(q_latent, mask_spec.mask_ratio)
+                elif mask_spec.mode == "random":
+                    decoder_input = apply_random_latent_mask(q_latent, mask_spec.mask_ratio)
+                else:  # dual: full path (matches validate() which uses recon_full)
+                    decoder_input = q_latent
+            else:
+                decoder_input = q_latent
+            recon = ae.decoder(decoder_input) if ae.decoder is not None else None
+            out = {"latent": latent, "quantized_latent": q_latent, "recon": recon}
 
             B = real.shape[0]
             take = B if args.limit is None else min(B, args.limit - n_done)
@@ -152,8 +168,10 @@ def main() -> int:
             if "mask" in save:
                 buffers["mask"].append(mask[:take].cpu().numpy())
             if "sgcs_per_sample" in save and recon is not None:
-                precoder = torch.stack([real, imag], dim=-1)
-                sgcs_sb = sgcs_per_subband(precoder, recon)         # (B, S)
+                real_t = batch.get("real_target", batch["real"]).to(device)
+                imag_t = batch.get("imag_target", batch["imag"]).to(device)
+                precoder_t = torch.stack([real_t, imag_t], dim=-1)
+                sgcs_sb = sgcs_per_subband(precoder_t, recon)       # (B, S)
                 sb_valid = mask.any(dim=-1).to(sgcs_sb.dtype)        # (B, S)
                 denom = sb_valid.sum(dim=1).clamp(min=1.0)
                 sample_sgcs = (sgcs_sb * sb_valid).sum(dim=1) / denom

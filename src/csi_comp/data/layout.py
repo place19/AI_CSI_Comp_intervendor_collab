@@ -5,7 +5,7 @@ CNN backbone:
 
 Transformer backbone:
     input  (real, imag) with each (B, S, P)  →  (B, S, P*2)
-    where the last dim interleaves real/imag per port: [r0, i0, r1, i1, ...]
+    where the last dim interleaves imag/real per port: [i0, r0, i1, r1, ...]
 """
 from __future__ import annotations
 

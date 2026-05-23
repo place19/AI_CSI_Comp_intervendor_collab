@@ -124,6 +124,8 @@ class ConsoleCallback:
             line += f" ✦ new best {best_key}={val_metrics[best_key]:.4f}"
         self._write(f"[epoch {epoch + 1}/{self._total_epochs}] val | {line}")
 
+    def on_epoch_complete(self, trainer, epoch, train_metrics) -> None: ...
+
     def on_train_end(self, trainer) -> None:
         total = time.time() - (self._train_started or time.time())
         best_name = trainer.best_metric.get("name", "?")
