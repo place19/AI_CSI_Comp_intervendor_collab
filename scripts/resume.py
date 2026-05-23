@@ -43,6 +43,7 @@ def main() -> int:
     import contextlib
     from csi_comp.analysis import build_note, profile_model
     from csi_comp.losses.composite import WeightedSumLoss
+    from csi_comp.models.latent_mask import parse_latent_mask_spec
     from csi_comp.training import (
         ConsoleCallback, Trainer, build_dataloaders, build_model,
         build_optimizer, build_scheduler, compile_autoencoder_inplace,
@@ -67,6 +68,7 @@ def main() -> int:
         steps_per_epoch=len(train_loader),
     )
 
+    mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))
     # Load checkpoint into the uncompiled model first, then optionally compile.
     # Saved state_dict never carries `_orig_mod.` prefixes (see compile_utils),
     # so this ordering keeps load semantics simple.
@@ -118,6 +120,7 @@ def main() -> int:
             scheduler=scheduler, callbacks=callbacks,
             best_metric=cfg["training"].get("best_metric", {"name": "sgcs", "mode": "max"}),
             amp_spec=amp_spec,
+            mask_spec=mask_spec,
         )
         trainer.epoch = restored.epoch + 1
         trainer.global_step = restored.global_step

@@ -10,6 +10,11 @@ from torch.utils.data import DataLoader
 
 from ..losses.composite import WeightedSumLoss
 from ..models import Autoencoder
+from ..models.latent_mask import (
+    LatentMaskSpec,
+    apply_latent_mask,
+    apply_random_latent_mask,
+)
 from .amp import AmpSpec, autocast_ctx, build_grad_scaler
 from .modes import ModeSpec
 
@@ -21,6 +26,7 @@ def _batch_to_io(
     batch: Dict[str, torch.Tensor],
     mode_spec: ModeSpec,
     device: torch.device,
+    mask_spec: Optional[LatentMaskSpec] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     real = batch["real"].to(device)
     imag = batch["imag"].to(device)
@@ -37,7 +43,32 @@ def _batch_to_io(
 
     out: Dict[str, Any] = {}
     if mode_spec.needs_encoder:
-        out = ae(real, imag)
+        # Masking applies only when both encoder and decoder are present.
+        if mask_spec is not None and mode_spec.needs_decoder:
+            latent = ae.encoder(real, imag)
+            q_latent = ae.quantizer(latent) if ae.quantizer is not None else latent
+            if mask_spec.mode == "half":
+                masked = apply_latent_mask(q_latent, mask_spec.mask_ratio)
+                recon = ae.decoder(masked) if ae.decoder is not None else None
+                out = {"latent": latent, "quantized_latent": q_latent, "recon": recon}
+            elif mask_spec.mode == "random":
+                masked = apply_random_latent_mask(q_latent, mask_spec.mask_ratio)
+                recon = ae.decoder(masked) if ae.decoder is not None else None
+                out = {"latent": latent, "quantized_latent": q_latent, "recon": recon}
+            elif mask_spec.mode == "dual":
+                recon_full = ae.decoder(q_latent) if ae.decoder is not None else None
+                masked = apply_latent_mask(q_latent, mask_spec.mask_ratio)
+                recon_half = ae.decoder(masked) if ae.decoder is not None else None
+                out = {
+                    "latent": latent,
+                    "quantized_latent": q_latent,
+                    "recon": recon_full,
+                    "recon_half": recon_half,
+                }
+            else:
+                out = ae(real, imag)
+        else:
+            out = ae(real, imag)
     elif mode_spec.needs_decoder:
         # decoder_only: provided latent goes through decoder directly
         latent = batch["latent_target"].to(device)
@@ -99,6 +130,7 @@ class Trainer:
     callbacks: List[TrainerCallback] = field(default_factory=list)
     best_metric: dict[str, Any] = field(default_factory=lambda: {"name": "sgcs", "mode": "max"})
     amp_spec: Optional[AmpSpec] = None
+    mask_spec: Optional[LatentMaskSpec] = None
 
     # Runtime state
     epoch: int = 0
@@ -147,7 +179,7 @@ class Trainer:
             # Model forward under autocast (when AMP enabled).
             with autocast_ctx(self.amp_spec):
                 pred_pack, target_pack = _batch_to_io(
-                    self.model, batch, self.mode_spec, self.device
+                    self.model, batch, self.mode_spec, self.device, self.mask_spec
                 )
             # Loss runs OUTSIDE autocast — fp32 island. Cast any fp tensors back
             # to fp32 first so the loss never sees half/bf16 inputs.
@@ -182,7 +214,7 @@ class Trainer:
         for batch in self.val_loader:  # type: ignore[union-attr]
             with autocast_ctx(self.amp_spec):
                 pred_pack, target_pack = _batch_to_io(
-                    self.model, batch, self.mode_spec, self.device
+                    self.model, batch, self.mode_spec, self.device, self.mask_spec
                 )
             # Loss + metrics in fp32, matching the training path.
             pred_pack = _to_fp32_pack(pred_pack)
