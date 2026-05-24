@@ -1,10 +1,17 @@
 """Evaluate a checkpoint on the val split.
 
+    # single checkpoint (existing)
     python scripts/test.py --checkpoint outputs/<run>/best.pt
+
+    # cross-checkpoint: encoder and decoder from separate checkpoints
+    python scripts/test.py \\
+        --encoder-checkpoint outputs/<enc_run>/best.pt \\
+        --decoder-checkpoint outputs/<dec_run>/best.pt
 """
 from __future__ import annotations
 
 import argparse
+import copy
 import sys
 from pathlib import Path
 
@@ -13,7 +20,12 @@ from _common import apply_cli_device, set_cuda_visible_early, set_cuda_visible_f
 
 def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--checkpoint", type=Path, required=True)
+    ap.add_argument("--checkpoint", type=Path, default=None,
+                    help="single checkpoint (encoder + decoder in one file)")
+    ap.add_argument("--encoder-checkpoint", type=Path, default=None,
+                    help="checkpoint to load encoder (and quantizer) from")
+    ap.add_argument("--decoder-checkpoint", type=Path, default=None,
+                    help="checkpoint to load decoder from")
     ap.add_argument(
         "--set",
         dest="overrides",
@@ -24,7 +36,54 @@ def _parse_args() -> argparse.Namespace:
     )
     ap.add_argument("--device", choices=("cpu", "cuda", "mps"), default=None)
     ap.add_argument("--gpu-index", type=int, default=None)
-    return ap.parse_args()
+    args = ap.parse_args()
+
+    cross = (args.encoder_checkpoint, args.decoder_checkpoint)
+    if args.checkpoint is None and not all(cross):
+        ap.error(
+            "specify either --checkpoint or both "
+            "--encoder-checkpoint and --decoder-checkpoint"
+        )
+    if args.checkpoint is not None and any(cross):
+        ap.error(
+            "--checkpoint cannot be combined with "
+            "--encoder-checkpoint / --decoder-checkpoint"
+        )
+    if any(cross) and not all(cross):
+        ap.error(
+            "--encoder-checkpoint and --decoder-checkpoint "
+            "must be specified together"
+        )
+    return args
+
+
+def _check_quantizer_compat(enc_q: dict, dec_q: dict) -> None:
+    fields = ["type", "bits", "value_range", "unit_spaced"]
+    mismatches = []
+    for f in fields:
+        ev, dv = enc_q.get(f), dec_q.get(f)
+        if ev != dv:
+            mismatches.append(f"  {f}: encoder={ev!r}, decoder={dv!r}")
+    if mismatches:
+        raise ValueError(
+            "Quantizer config mismatch between encoder and decoder checkpoints:\n"
+            + "\n".join(mismatches)
+        )
+
+
+def _merge_cross_cfg(enc_sd: dict, dec_sd: dict) -> dict:
+    enc_cfg = enc_sd.get("config") or {}
+    dec_cfg = dec_sd.get("config") or {}
+    if not enc_cfg:
+        raise ValueError("encoder checkpoint has no embedded config")
+    if not dec_cfg:
+        raise ValueError("decoder checkpoint has no embedded config")
+    cfg = copy.deepcopy(enc_cfg)
+    cfg["model"]["decoder"] = copy.deepcopy(dec_cfg["model"]["decoder"])
+    cfg["training"]["mode"] = "joint"
+    # Default loss for cross-mode evaluation; user can override via --set.
+    cfg["loss"] = {"terms": [{"name": "one_minus_sgcs", "weight": 1.0}]}
+    return cfg
 
 
 def main() -> int:
@@ -41,26 +100,56 @@ def main() -> int:
     )
     from csi_comp.training.checkpoint import load_checkpoint
 
-    sd = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    cfg = sd.get("config")
-    if not cfg:
-        print("checkpoint has no embedded config", file=sys.stderr)
-        return 2
-    apply_overrides(cfg, args.overrides)
-    cfg = resolve(cfg)
-    apply_cli_device(cfg["experiment"], args)
-    set_cuda_visible_early(cfg["experiment"])
+    if args.encoder_checkpoint and args.decoder_checkpoint:
+        # --- cross-checkpoint mode ---
+        enc_sd = torch.load(args.encoder_checkpoint, map_location="cpu", weights_only=False)
+        dec_sd = torch.load(args.decoder_checkpoint, map_location="cpu", weights_only=False)
+        _check_quantizer_compat(
+            enc_sd.get("config", {}).get("quantizer", {}),
+            dec_sd.get("config", {}).get("quantizer", {}),
+        )
+        cfg = _merge_cross_cfg(enc_sd, dec_sd)
+        apply_overrides(cfg, args.overrides)
+        cfg = resolve(cfg)
+        apply_cli_device(cfg["experiment"], args)
+        set_cuda_visible_early(cfg["experiment"])
 
-    seed_everything(cfg["experiment"].get("seed", 0))
-    device = configure_device(cfg["experiment"])
+        seed_everything(cfg["experiment"].get("seed", 0))
+        device = configure_device(cfg["experiment"])
 
-    mode = cfg["training"]["mode"]
-    spec = get_mode_spec(mode)
-    ae, _, _ = build_model(cfg, spec)
-    load_checkpoint(args.checkpoint, ae, optimizer=None, scheduler=None, strict=False)
-    compile_autoencoder_inplace(ae, cfg["training"].get("compile"))
-    amp_spec = resolve_amp_cfg(cfg["training"].get("amp"), device)
-    mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))
+        spec = get_mode_spec("joint")
+        ae, _, _ = build_model(cfg, spec)
+        # Load each component from its own checkpoint (strict=False: missing keys skipped).
+        # save_checkpoint() stores None for absent components, so the two calls
+        # never overwrite each other's weights.
+        load_checkpoint(args.encoder_checkpoint, ae, optimizer=None, scheduler=None, strict=False)
+        load_checkpoint(args.decoder_checkpoint, ae, optimizer=None, scheduler=None, strict=False)
+        compile_autoencoder_inplace(ae, cfg["training"].get("compile"))
+        amp_spec = resolve_amp_cfg(cfg["training"].get("amp"), device)
+        mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))
+        mode = "joint"
+    else:
+        # --- single checkpoint mode (existing behaviour) ---
+        sd = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        cfg = sd.get("config")
+        if not cfg:
+            print("checkpoint has no embedded config", file=sys.stderr)
+            return 2
+        apply_overrides(cfg, args.overrides)
+        cfg = resolve(cfg)
+        apply_cli_device(cfg["experiment"], args)
+        set_cuda_visible_early(cfg["experiment"])
+
+        seed_everything(cfg["experiment"].get("seed", 0))
+        device = configure_device(cfg["experiment"])
+
+        mode = cfg["training"]["mode"]
+        spec = get_mode_spec(mode)
+        ae, _, _ = build_model(cfg, spec)
+        load_checkpoint(args.checkpoint, ae, optimizer=None, scheduler=None, strict=False)
+        compile_autoencoder_inplace(ae, cfg["training"].get("compile"))
+        amp_spec = resolve_amp_cfg(cfg["training"].get("amp"), device)
+        mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))
 
     val_loader = build_val_loader(cfg["data"])
     loss_fn = WeightedSumLoss(cfg["loss"]["terms"], mode=mode)

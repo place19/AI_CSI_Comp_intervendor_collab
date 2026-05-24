@@ -123,6 +123,21 @@ def test_test_runs_after_train(workdir):
     assert "val/sgcs" in result.stdout or "val/loss/total" in result.stdout
 
 
+def test_cross_checkpoint_test(workdir):
+    """Cross-checkpoint mode: load encoder and decoder from separate checkpoints.
+
+    Uses the same joint checkpoint for both sides so no extra training is
+    needed; the goal is to exercise the config-merge, quantizer-compat check,
+    and dual load_checkpoint code paths end-to-end.
+    """
+    best = workdir / "outputs" / "e2e_run" / "best.pt"
+    result = _run([PY, str(REPO / "scripts" / "test.py"),
+                   "--encoder-checkpoint", str(best),
+                   "--decoder-checkpoint", str(best)],
+                  cwd=workdir)
+    assert "val/sgcs" in result.stdout
+
+
 def test_infer_default_save_skips_original(workdir):
     """Default --save excludes 'original'; all other items get written."""
     import json
