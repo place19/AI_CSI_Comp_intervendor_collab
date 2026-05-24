@@ -325,10 +325,10 @@ def main() -> int:
             meta["sgcs_std"] = float(arr.std())
             summary.append(
                 f"  {k}: shape={tuple(arr.shape)} mean={arr.mean():.4f} "
-                f"std={arr.std():.4f} → {path.name}"
+                f"std={arr.std():.4f} ->{path.name}"
             )
         else:
-            summary.append(f"  {k}: shape={tuple(arr.shape)} → {path.name}")
+            summary.append(f"  {k}: shape={tuple(arr.shape)} ->{path.name}")
         meta["saved"].append(k)
 
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
