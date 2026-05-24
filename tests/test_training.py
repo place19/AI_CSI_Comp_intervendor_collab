@@ -192,6 +192,73 @@ def test_trainer_frozen_decoder_does_not_update_decoder(npz_root, tmp_path, make
         assert torch.equal(v, snapshot[k]), f"frozen decoder param {k} changed"
 
 
+def test_load_checkpoint_component_selective(tmp_path):
+    """component-selective load must not overwrite weights from the other checkpoint."""
+    from csi_comp.training.checkpoint import load_checkpoint, save_checkpoint
+
+    cfg = _cfg("joint")
+    spec = get_mode_spec("joint")
+    ae_enc, _, _ = build_model(cfg, spec)
+    ae_dec, _, _ = build_model(cfg, spec)
+
+    # Give each model distinct, recognizable weights.
+    with torch.no_grad():
+        for p in ae_enc.encoder.parameters():
+            p.fill_(1.0)
+        for p in ae_enc.decoder.parameters():
+            p.fill_(2.0)
+        for p in ae_dec.encoder.parameters():
+            p.fill_(3.0)
+        for p in ae_dec.decoder.parameters():
+            p.fill_(4.0)
+
+    enc_ckpt = tmp_path / "enc.pt"
+    dec_ckpt = tmp_path / "dec.pt"
+    opt = torch.optim.SGD(ae_enc.parameters(), lr=0.0)
+    save_checkpoint(enc_ckpt, ae_enc, opt, None, 0, 0, 0.0, {})
+    save_checkpoint(dec_ckpt, ae_dec, opt, None, 0, 0, 0.0, {})
+
+    ae_target, _, _ = build_model(cfg, spec)
+    load_checkpoint(enc_ckpt, ae_target, strict=True, components=("encoder", "quantizer"))
+    load_checkpoint(dec_ckpt, ae_target, strict=True, components=("decoder",))
+
+    # Encoder should come from enc_ckpt (all 1.0), decoder from dec_ckpt (all 4.0).
+    for p in ae_target.encoder.parameters():
+        assert p.unique().item() == pytest.approx(1.0), "encoder weight overwritten"
+    for p in ae_target.decoder.parameters():
+        assert p.unique().item() == pytest.approx(4.0), "decoder weight overwritten"
+
+
+def test_check_quantizer_compat_default_normalization():
+    """Absent keys must be filled with defaults before comparison.
+
+    unit_spaced omitted on one side vs True on the other should NOT raise,
+    because both resolve to the same effective default.
+    """
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+    from _common import check_quantizer_compat
+
+    # Equivalent configs: one explicit, one relying on defaults.
+    check_quantizer_compat(
+        {"type": "uniform", "bits": 2, "value_range": [-1.0, 1.0]},
+        {"type": "uniform", "bits": 2, "value_range": [-1.0, 1.0], "unit_spaced": True},
+    )
+
+    # Also fine when both omit unit_spaced.
+    check_quantizer_compat(
+        {"type": "uniform", "bits": 4, "value_range": [-1.0, 1.0]},
+        {"type": "uniform", "bits": 4, "value_range": [-1.0, 1.0]},
+    )
+
+    # Actual mismatch must still raise.
+    with pytest.raises(ValueError, match="bits"):
+        check_quantizer_compat(
+            {"type": "uniform", "bits": 2, "value_range": [-1.0, 1.0]},
+            {"type": "uniform", "bits": 4, "value_range": [-1.0, 1.0]},
+        )
+
+
 def test_build_scheduler_cosine():
     model = torch.nn.Linear(4, 4)
     opt = torch.optim.Adam(model.parameters())

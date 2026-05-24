@@ -93,15 +93,26 @@ class RestoredState:
     config: dict[str, Any]
 
 
+_ALL_COMPONENTS = ("encoder", "decoder", "quantizer")
+
+
 def load_checkpoint(
     path: Path,
     ae: Autoencoder,
     optimizer: Optional[torch.optim.Optimizer] = None,
     scheduler: Optional[Any] = None,
     strict: bool = True,
+    components: tuple[str, ...] = _ALL_COMPONENTS,
 ) -> RestoredState:
+    """Load a checkpoint into `ae`.
+
+    `components` restricts which sub-modules are loaded (default: all three).
+    Cross-checkpoint callers should pass ``("encoder", "quantizer")`` for the
+    encoder checkpoint and ``("decoder",)`` for the decoder checkpoint so the
+    two calls never overwrite each other's weights.
+    """
     sd = torch.load(Path(path), map_location="cpu", weights_only=False)
-    for name in ("encoder", "decoder", "quantizer"):
+    for name in components:
         mod = getattr(ae, name)
         if mod is not None and sd.get(name) is not None:
             # Load into the underlying module so the contract works whether the

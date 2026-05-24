@@ -128,7 +128,7 @@ def test_cross_checkpoint_test(workdir):
 
     Uses the same joint checkpoint for both sides so no extra training is
     needed; the goal is to exercise the config-merge, quantizer-compat check,
-    and dual load_checkpoint code paths end-to-end.
+    and component-selective load_checkpoint code paths end-to-end.
     """
     best = workdir / "outputs" / "e2e_run" / "best.pt"
     result = _run([PY, str(REPO / "scripts" / "test.py"),
@@ -162,7 +162,7 @@ def test_infer_default_save_skips_original(workdir):
 
 
 def test_infer_save_all_includes_original(workdir):
-    """`--save all` adds original.npz to the dumped set."""
+    """`--save all` adds original.npy to the dumped set."""
     out_dir = workdir / "infer_all"
     _run([PY, str(REPO / "scripts" / "infer.py"),
           "--checkpoint", str(workdir / "outputs" / "e2e_run" / "best.pt"),
@@ -201,7 +201,7 @@ def test_infer_cross_checkpoint(workdir):
     """Cross-checkpoint infer: encoder and decoder from separate checkpoints.
 
     Uses the same joint checkpoint for both sides so no extra training is
-    needed; exercises config-merge, quantizer-compat check, dual
+    needed; exercises config-merge, quantizer-compat check, component-selective
     load_checkpoint, and output file writing end-to-end.
     """
     import json

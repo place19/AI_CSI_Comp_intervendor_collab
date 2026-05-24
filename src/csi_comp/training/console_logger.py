@@ -121,7 +121,7 @@ class ConsoleCallback:
         line = _fmt_metrics(val_metrics, keys)
         best_key = f"best/{trainer.best_metric['name']}"
         if best_key in val_metrics:
-            line += f" ✦ new best {best_key}={val_metrics[best_key]:.4f}"
+            line += f" * new best {best_key}={val_metrics[best_key]:.4f}"
         self._write(f"[epoch {epoch + 1}/{self._total_epochs}] val | {line}")
 
     def on_epoch_complete(self, trainer, epoch, train_metrics) -> None: ...

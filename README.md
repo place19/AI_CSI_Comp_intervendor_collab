@@ -90,7 +90,7 @@ Output:
 [epoch 1/30 step 50/100] loss/total=0.9158 sgcs=0.0842 lr=8.15e-04
 [epoch 1/30 step 100/100] loss/total=0.9001 sgcs=0.0999 lr=7.75e-04
 [epoch 1/30] train done in 2.4s | loss/total=0.9079 sgcs=0.0921 lr=7.95e-04
-[epoch 1/30] val | val/loss/total=0.9009 val/sgcs=0.0991 ✦ new best best/sgcs=0.0991
+[epoch 1/30] val | val/loss/total=0.9009 val/sgcs=0.0991 * new best best/sgcs=0.0991
 ...
 [train] done in 79.0s | best sgcs=0.1519
 ```
@@ -332,7 +332,7 @@ The same pattern (`@register("loss"|"quantizer"|"dataset"|"scheduler", "...")`) 
 ## Testing
 
 ```bash
-pytest                # full suite (339 tests)
+pytest                # full suite (341 tests)
 pytest tests/test_amp.py tests/test_compile.py tests/test_onnx_fuse.py -v
 pytest tests/test_latent_mask.py -v   # latent masking unit + integration tests
 ```
@@ -368,7 +368,7 @@ src/csi_comp/
 
 scripts/                 # train.py, test.py, export_onnx.py, infer.py
 configs/                 # examples/
-tests/                   # pytest suite (339 tests)
+tests/                   # pytest suite (341 tests)
 ```
 
 ---

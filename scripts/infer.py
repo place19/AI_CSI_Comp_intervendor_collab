@@ -34,7 +34,10 @@ import time
 from pathlib import Path
 from typing import List
 
-from _common import apply_cli_device, set_cuda_visible_early, set_cuda_visible_from_args
+from _common import (
+    apply_cli_device, check_quantizer_compat,
+    set_cuda_visible_early, set_cuda_visible_from_args,
+)
 
 
 SAVE_ITEMS = ["recon", "latent", "quant_latent", "original", "mask", "sgcs_per_sample"]
@@ -54,20 +57,6 @@ def _parse_save_arg(raw: str | None) -> List[str]:
             f"unknown --save items {bad}; valid: {SAVE_ITEMS} or 'all'"
         )
     return items
-
-
-def _check_quantizer_compat(enc_q: dict, dec_q: dict) -> None:
-    fields = ["type", "bits", "value_range", "unit_spaced"]
-    mismatches = []
-    for f in fields:
-        ev, dv = enc_q.get(f), dec_q.get(f)
-        if ev != dv:
-            mismatches.append(f"  {f}: encoder={ev!r}, decoder={dv!r}")
-    if mismatches:
-        raise ValueError(
-            "Quantizer config mismatch between encoder and decoder checkpoints:\n"
-            + "\n".join(mismatches)
-        )
 
 
 def _merge_cross_cfg(enc_sd: dict, dec_sd: dict) -> dict:
@@ -159,7 +148,7 @@ def main() -> int:
         # --- cross-checkpoint mode ---
         enc_sd = torch.load(args.encoder_checkpoint, map_location="cpu", weights_only=False)
         dec_sd = torch.load(args.decoder_checkpoint, map_location="cpu", weights_only=False)
-        _check_quantizer_compat(
+        check_quantizer_compat(
             enc_sd.get("config", {}).get("quantizer", {}),
             dec_sd.get("config", {}).get("quantizer", {}),
         )
@@ -187,8 +176,10 @@ def main() -> int:
 
         spec = get_mode_spec("joint")
         ae, _, _ = build_model(cfg, spec)
-        load_checkpoint(args.encoder_checkpoint, ae, optimizer=None, scheduler=None, strict=False)
-        load_checkpoint(args.decoder_checkpoint, ae, optimizer=None, scheduler=None, strict=False)
+        load_checkpoint(args.encoder_checkpoint, ae, optimizer=None, scheduler=None, strict=False,
+                        components=("encoder", "quantizer"))
+        load_checkpoint(args.decoder_checkpoint, ae, optimizer=None, scheduler=None, strict=False,
+                        components=("decoder",))
         compile_autoencoder_inplace(ae, cfg["training"].get("compile"))
         ae.to(device).eval()
         mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))

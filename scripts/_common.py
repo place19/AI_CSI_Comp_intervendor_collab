@@ -100,6 +100,29 @@ def set_cuda_visible_from_args(args: argparse.Namespace) -> None:
         os.environ.setdefault("CUDA_VISIBLE_DEVICES", str(int(args.gpu_index)))
 
 
+_QUANTIZER_DEFAULTS: dict = {"type": "uniform", "unit_spaced": True}
+
+
+def check_quantizer_compat(enc_q: dict, dec_q: dict) -> None:
+    """Raise ValueError if quantizer configs are incompatible.
+
+    Absent keys are filled with their effective defaults before comparison so
+    that ``{}`` and ``{"unit_spaced": True}`` are treated as identical.
+    """
+    fields = ["type", "bits", "value_range", "unit_spaced"]
+    mismatches = []
+    for f in fields:
+        ev = enc_q.get(f, _QUANTIZER_DEFAULTS.get(f))
+        dv = dec_q.get(f, _QUANTIZER_DEFAULTS.get(f))
+        if ev != dv:
+            mismatches.append(f"  {f}: encoder={ev!r}, decoder={dv!r}")
+    if mismatches:
+        raise ValueError(
+            "Quantizer config mismatch between encoder and decoder checkpoints:\n"
+            + "\n".join(mismatches)
+        )
+
+
 def load_resolved_config(path: Path, overrides: Iterable[str]) -> dict:
     """Lazy import to defer torch loading."""
     from csi_comp.config import load_and_resolve
