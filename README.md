@@ -25,7 +25,7 @@ Built around a config-driven, registry-based block system so new encoders/decode
 - **DataLoader knobs from YAML**: `num_workers`, `pin_memory`, `prefetch_factor`, `persistent_workers`, `drop_last` plus per-split `train_loader` / `val_loader` overrides.
 - **Mixed precision (AMP)**: `training.amp.{enabled, dtype}` wraps the forward in `torch.amp.autocast` for train + val. Two fp32 islands are baked in — loss computation and MHA softmax — to prevent backprop blow-ups seen under naive fp16. `GradScaler` is only constructed for cuda + fp16.
 - **`torch.compile`** (optional): `training.compile.{enabled, mode, dynamic, fullgraph}` compiles encoder and decoder separately (quantizer stays uncompiled — STE backward is hostile to graph capture). Checkpoints save the underlying `_orig_mod` state_dict so disk files load cleanly into compiled or uncompiled inference builds.
-- **ONNX export**: encoder alone, encoder + quantizer, decoder alone, or full autoencoder. Conv↔BN / Linear↔BN1d folds are applied in-place on a deep copy before export (driven by each block's `fusion_pairs` metadata), so the exported graph matches the profiler's "fused inference model" accounting. `--no-fuse` keeps the unfused graph for debugging. Encoder-facing scopes accept a single **`csi`** tensor (CNN: `(1, 2, S, P)` channels `[imag, real]`; Transformer: `(1, S, 2P)` interleaved `[i₀, r₀, i₁, r₁, …]`), bypassing the LayoutAdapter in the exported graph. AMP fp32 casts around MHA softmax are omitted — inference is always fp32.
+- **ONNX export**: encoder alone, encoder + quantizer, decoder alone, or full autoencoder. Conv↔BN / Linear↔BN1d folds are applied in-place on a deep copy before export (driven by each block's `fusion_pairs` metadata), so the exported graph matches the profiler's "fused inference model" accounting. `--no-fuse` keeps the unfused graph for debugging. Encoder-facing scopes accept a single **`input`** tensor (CNN: `(1, 2, S, P)` channels `[imag, real]`; Transformer: `(1, S, 2P)` interleaved `[i₀, r₀, i₁, r₁, …]`), bypassing the LayoutAdapter in the exported graph. AMP fp32 casts around MHA softmax are omitted — inference is always fp32.
 - **Reproducibility**: fixed seeds; config + resolved config + checkpoints serialized together.
 
 ---
@@ -129,8 +129,13 @@ python scripts/train.py \
   --config configs/examples/new_config.yaml \
   --pretrained-checkpoint outputs/<run>/best.pt --no-strict
 
-# Evaluate
+# Evaluate — single checkpoint
 python scripts/test.py --checkpoint outputs/<run>/best.pt
+
+# Evaluate — cross-checkpoint: encoder and decoder from separate runs
+python scripts/test.py \
+  --encoder-checkpoint outputs/<enc_run>/best.pt \
+  --decoder-checkpoint outputs/<dec_run>/best.pt
 
 # Export to ONNX (encoder, encoder_quant, decoder, full)
 python scripts/export_onnx.py \
@@ -314,14 +319,14 @@ from . import (
 
 Now `{ name: se_block, reduction: 8 }` works in any YAML.
 
-The same pattern (`@register("losses"|"quantizer"|"dataset"|"scheduler", "...")`) extends to losses, quantizers, datasets, and schedulers.
+The same pattern (`@register("loss"|"quantizer"|"dataset"|"scheduler", "...")`) extends to losses, quantizers, datasets, and schedulers.
 
 ---
 
 ## Testing
 
 ```bash
-pytest                # full suite (337 tests)
+pytest                # full suite (338 tests)
 pytest tests/test_amp.py tests/test_compile.py tests/test_onnx_fuse.py -v
 pytest tests/test_latent_mask.py -v   # latent masking unit + integration tests
 ```
@@ -357,7 +362,7 @@ src/csi_comp/
 
 scripts/                 # train.py, test.py, export_onnx.py, infer.py
 configs/                 # examples/
-tests/                   # pytest suite (337 tests)
+tests/                   # pytest suite (338 tests)
 ```
 
 ---

@@ -4,12 +4,12 @@ The same checkpoint feeds every scope. Quantization in the exported graph uses
 the `hard` strategy so there's no STE detach branch and the op is clean.
 
 Input convention for encoder-facing scopes:
-    The exported ONNX model accepts a single pre-combined `csi` tensor rather
+    The exported ONNX model accepts a single pre-combined `input` tensor rather
     than separate `real` and `imag` inputs, eliminating the LayoutAdapter stack
     from the graph. Pre-combine using the same [imag, real] channel order that
     `LayoutAdapter` uses internally:
-        CNN layout:         csi  (1, 2, S, P)  — ch0=imag, ch1=real
-        Transformer layout: csi  (1, S, 2*P)   — interleaved [i0, r0, i1, r1, …]
+        CNN layout:         input  (1, 2, S, P)  — ch0=imag, ch1=real
+        Transformer layout: input  (1, S, 2*P)   — interleaved [i0, r0, i1, r1, …]
 """
 from __future__ import annotations
 

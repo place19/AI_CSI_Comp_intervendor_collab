@@ -8,6 +8,7 @@ ONNX graph matches.
 
 Supported pairs:
 - (nn.Conv2d, nn.BatchNorm2d)  — `torch.nn.utils.fusion.fuse_conv_bn_eval`
+- (nn.Conv2d, nn.BatchNorm1d)  — `torch.nn.utils.fusion.fuse_conv_bn_eval` (uncommon)
 - (nn.Linear, nn.BatchNorm1d)  — custom fold (W' = diag(γ/σ̂) @ W, b' = ...)
 
 In-place on the model the caller passes in. The caller is expected to deep-copy
