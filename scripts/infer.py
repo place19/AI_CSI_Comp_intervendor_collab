@@ -1,9 +1,17 @@
 """Dump per-sample inference outputs from a trained checkpoint.
 
+    # single checkpoint
     python scripts/infer.py \\
         --checkpoint outputs/<run>/best.pt \\
         --data-path ../make_lmdb/test \\
         --out outputs/<run>/infer_test
+
+    # cross-checkpoint: encoder and decoder from separate checkpoints
+    python scripts/infer.py \\
+        --encoder-checkpoint outputs/<enc_run>/best.pt \\
+        --decoder-checkpoint outputs/<dec_run>/best.pt \\
+        --data-path ../make_lmdb/test \\
+        --out outputs/infer_cross
 
 Outputs in `--out` (one `.npy` per item; load directly with `np.load(path)`):
     recon.npy            (N, max_subband, max_port, 2)   reconstructed precoder
@@ -48,11 +56,45 @@ def _parse_save_arg(raw: str | None) -> List[str]:
     return items
 
 
+def _check_quantizer_compat(enc_q: dict, dec_q: dict) -> None:
+    fields = ["type", "bits", "value_range", "unit_spaced"]
+    mismatches = []
+    for f in fields:
+        ev, dv = enc_q.get(f), dec_q.get(f)
+        if ev != dv:
+            mismatches.append(f"  {f}: encoder={ev!r}, decoder={dv!r}")
+    if mismatches:
+        raise ValueError(
+            "Quantizer config mismatch between encoder and decoder checkpoints:\n"
+            + "\n".join(mismatches)
+        )
+
+
+def _merge_cross_cfg(enc_sd: dict, dec_sd: dict) -> dict:
+    import copy
+    enc_cfg = enc_sd.get("config") or {}
+    dec_cfg = dec_sd.get("config") or {}
+    if not enc_cfg:
+        raise ValueError("encoder checkpoint has no embedded config")
+    if not dec_cfg:
+        raise ValueError("decoder checkpoint has no embedded config")
+    cfg = copy.deepcopy(enc_cfg)
+    cfg["model"]["decoder"] = copy.deepcopy(dec_cfg["model"]["decoder"])
+    cfg["training"]["mode"] = "joint"
+    cfg["loss"] = {"terms": [{"name": "one_minus_sgcs", "weight": 1.0}]}
+    return cfg
+
+
 def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--checkpoint", type=Path, required=True)
+    ap.add_argument("--checkpoint", type=Path, default=None,
+                    help="single checkpoint (encoder + decoder in one file)")
+    ap.add_argument("--encoder-checkpoint", type=Path, default=None,
+                    help="checkpoint to load encoder (and quantizer) from")
+    ap.add_argument("--decoder-checkpoint", type=Path, default=None,
+                    help="checkpoint to load decoder from")
     ap.add_argument(
         "--set",
         dest="overrides",
@@ -82,7 +124,24 @@ def _parse_args() -> argparse.Namespace:
         "--limit", type=int, default=None,
         help="optional cap on number of samples (handy for smoke tests)",
     )
-    return ap.parse_args()
+    args = ap.parse_args()
+    cross = (args.encoder_checkpoint, args.decoder_checkpoint)
+    if args.checkpoint is None and not all(cross):
+        ap.error(
+            "specify either --checkpoint or both "
+            "--encoder-checkpoint and --decoder-checkpoint"
+        )
+    if args.checkpoint is not None and any(cross):
+        ap.error(
+            "--checkpoint cannot be combined with "
+            "--encoder-checkpoint / --decoder-checkpoint"
+        )
+    if any(cross) and not all(cross):
+        ap.error(
+            "--encoder-checkpoint and --decoder-checkpoint "
+            "must be specified together"
+        )
+    return args
 
 
 def main() -> int:
@@ -91,51 +150,93 @@ def main() -> int:
     import torch
     from csi_comp.config import apply_overrides, resolve
 
-    sd = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    cfg = sd.get("config")
-    if not cfg:
-        print("checkpoint has no embedded config", file=sys.stderr)
-        return 2
-
     # --data-path is a shortcut for --set data.val_path=...; applied before
     # user --set overrides so explicit --set data.val_path=... wins.
-    overrides = []
-    if args.data_path is not None:
-        overrides.append(f"data.val_path={args.data_path}")
-    overrides.extend(args.overrides)
-    apply_overrides(cfg, overrides)
-    cfg = resolve(cfg)
-    apply_cli_device(cfg["experiment"], args)
-    set_cuda_visible_early(cfg["experiment"])
+    data_override = [f"data.val_path={args.data_path}"] if args.data_path is not None else []
+    overrides = data_override + args.overrides
 
-    save = _parse_save_arg(args.save)
+    if args.encoder_checkpoint and args.decoder_checkpoint:
+        # --- cross-checkpoint mode ---
+        enc_sd = torch.load(args.encoder_checkpoint, map_location="cpu", weights_only=False)
+        dec_sd = torch.load(args.decoder_checkpoint, map_location="cpu", weights_only=False)
+        _check_quantizer_compat(
+            enc_sd.get("config", {}).get("quantizer", {}),
+            dec_sd.get("config", {}).get("quantizer", {}),
+        )
+        cfg = _merge_cross_cfg(enc_sd, dec_sd)
+        apply_overrides(cfg, overrides)
+        cfg = resolve(cfg)
+        apply_cli_device(cfg["experiment"], args)
+        set_cuda_visible_early(cfg["experiment"])
 
-    # Remaining heavy imports after CUDA_VISIBLE_DEVICES is set.
-    import numpy as np
-    from csi_comp.losses.sgcs import sgcs_per_subband
-    from csi_comp.models.latent_mask import (
-        apply_latent_mask, apply_random_latent_mask, parse_latent_mask_spec,
-    )
-    from csi_comp.training import (
-        build_val_loader, build_model, compile_autoencoder_inplace,
-        configure_device, get_mode_spec, seed_everything,
-    )
-    from csi_comp.training.checkpoint import load_checkpoint
+        save = _parse_save_arg(args.save)
 
-    seed_everything(cfg["experiment"].get("seed", 0))
-    device = configure_device(cfg["experiment"])
+        import numpy as np
+        from csi_comp.losses.sgcs import sgcs_per_subband
+        from csi_comp.models.latent_mask import (
+            apply_latent_mask, apply_random_latent_mask, parse_latent_mask_spec,
+        )
+        from csi_comp.training import (
+            build_val_loader, build_model, compile_autoencoder_inplace,
+            configure_device, get_mode_spec, seed_everything,
+        )
+        from csi_comp.training.checkpoint import load_checkpoint
 
-    mode = cfg["training"]["mode"]
-    spec = get_mode_spec(mode)
-    ae, _, _ = build_model(cfg, spec)
-    load_checkpoint(args.checkpoint, ae, optimizer=None, scheduler=None, strict=False)
-    compile_autoencoder_inplace(ae, cfg["training"].get("compile"))
-    ae.to(device).eval()
-    mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))
+        seed_everything(cfg["experiment"].get("seed", 0))
+        device = configure_device(cfg["experiment"])
+
+        spec = get_mode_spec("joint")
+        ae, _, _ = build_model(cfg, spec)
+        load_checkpoint(args.encoder_checkpoint, ae, optimizer=None, scheduler=None, strict=False)
+        load_checkpoint(args.decoder_checkpoint, ae, optimizer=None, scheduler=None, strict=False)
+        compile_autoencoder_inplace(ae, cfg["training"].get("compile"))
+        ae.to(device).eval()
+        mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))
+    else:
+        # --- single checkpoint mode ---
+        sd = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        cfg = sd.get("config")
+        if not cfg:
+            print("checkpoint has no embedded config", file=sys.stderr)
+            return 2
+
+        apply_overrides(cfg, overrides)
+        cfg = resolve(cfg)
+        apply_cli_device(cfg["experiment"], args)
+        set_cuda_visible_early(cfg["experiment"])
+
+        save = _parse_save_arg(args.save)
+
+        import numpy as np
+        from csi_comp.losses.sgcs import sgcs_per_subband
+        from csi_comp.models.latent_mask import (
+            apply_latent_mask, apply_random_latent_mask, parse_latent_mask_spec,
+        )
+        from csi_comp.training import (
+            build_val_loader, build_model, compile_autoencoder_inplace,
+            configure_device, get_mode_spec, seed_everything,
+        )
+        from csi_comp.training.checkpoint import load_checkpoint
+
+        seed_everything(cfg["experiment"].get("seed", 0))
+        device = configure_device(cfg["experiment"])
+
+        mode = cfg["training"]["mode"]
+        spec = get_mode_spec(mode)
+        ae, _, _ = build_model(cfg, spec)
+        load_checkpoint(args.checkpoint, ae, optimizer=None, scheduler=None, strict=False)
+        compile_autoencoder_inplace(ae, cfg["training"].get("compile"))
+        ae.to(device).eval()
+        mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))
 
     val_loader = build_val_loader(cfg["data"])
 
-    out_dir = args.out or (args.checkpoint.parent / f"infer_{int(time.time())}")
+    if args.out is not None:
+        out_dir = args.out
+    elif args.encoder_checkpoint and args.decoder_checkpoint:
+        out_dir = args.encoder_checkpoint.parent / f"infer_cross_{int(time.time())}"
+    else:
+        out_dir = args.checkpoint.parent / f"infer_{int(time.time())}"
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -205,8 +306,16 @@ def main() -> int:
 
             n_done += take
 
+    if args.encoder_checkpoint and args.decoder_checkpoint:
+        ckpt_meta = {
+            "encoder_checkpoint": str(args.encoder_checkpoint.resolve()),
+            "decoder_checkpoint": str(args.decoder_checkpoint.resolve()),
+        }
+    else:
+        ckpt_meta = {"checkpoint": str(args.checkpoint.resolve())}
+
     meta: dict = {
-        "checkpoint": str(args.checkpoint.resolve()),
+        **ckpt_meta,
         "data_path": cfg["data"].get("val_path"),
         "n_samples": int(n_done),
         "device": str(device),

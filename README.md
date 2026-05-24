@@ -146,6 +146,12 @@ python scripts/export_onnx.py \
 python scripts/infer.py \
   --checkpoint outputs/<run>/best.pt \
   --data-path /path/to/data.npz
+
+# Inference — cross-checkpoint: encoder and decoder from separate runs
+python scripts/infer.py \
+  --encoder-checkpoint outputs/<enc_run>/best.pt \
+  --decoder-checkpoint outputs/<dec_run>/best.pt \
+  --data-path /path/to/data.npz
 ```
 
 ---
@@ -326,7 +332,7 @@ The same pattern (`@register("loss"|"quantizer"|"dataset"|"scheduler", "...")`) 
 ## Testing
 
 ```bash
-pytest                # full suite (338 tests)
+pytest                # full suite (339 tests)
 pytest tests/test_amp.py tests/test_compile.py tests/test_onnx_fuse.py -v
 pytest tests/test_latent_mask.py -v   # latent masking unit + integration tests
 ```
@@ -362,7 +368,7 @@ src/csi_comp/
 
 scripts/                 # train.py, test.py, export_onnx.py, infer.py
 configs/                 # examples/
-tests/                   # pytest suite (338 tests)
+tests/                   # pytest suite (339 tests)
 ```
 
 ---

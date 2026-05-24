@@ -197,6 +197,37 @@ def test_infer_limit_caps_samples(workdir):
     assert recon.shape == (2, 6, 10, 2)
 
 
+def test_infer_cross_checkpoint(workdir):
+    """Cross-checkpoint infer: encoder and decoder from separate checkpoints.
+
+    Uses the same joint checkpoint for both sides so no extra training is
+    needed; exercises config-merge, quantizer-compat check, dual
+    load_checkpoint, and output file writing end-to-end.
+    """
+    import json
+    import numpy as np
+
+    best = workdir / "outputs" / "e2e_run" / "best.pt"
+    out_dir = workdir / "infer_cross"
+    _run([PY, str(REPO / "scripts" / "infer.py"),
+          "--encoder-checkpoint", str(best),
+          "--decoder-checkpoint", str(best),
+          "--out", str(out_dir)], cwd=workdir)
+
+    for f in ("recon.npy", "latent.npy", "quant_latent.npy", "mask.npy", "sgcs_per_sample.npy"):
+        assert (out_dir / f).exists(), f"missing {f}"
+    assert not (out_dir / "original.npy").exists()
+
+    meta = json.loads((out_dir / "meta.json").read_text())
+    assert "encoder_checkpoint" in meta
+    assert "decoder_checkpoint" in meta
+    assert "checkpoint" not in meta
+    assert meta["n_samples"] == 4
+
+    recon = np.load(out_dir / "recon.npy")
+    assert recon.shape == (4, 6, 10, 2)
+
+
 def test_pretrained_checkpoint_continues_training(workdir):
     _run([PY, str(REPO / "scripts" / "train.py"),
           "--config", str(workdir / "outputs" / "e2e_run" / "config.resolved.yaml"),
