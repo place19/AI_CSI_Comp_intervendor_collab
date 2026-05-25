@@ -8,6 +8,7 @@ from csi_comp.training.compile_utils import (
     compile_autoencoder_inplace,
     maybe_compile,
     unwrap_compiled,
+    uses_cuda_graphs,
 )
 
 
@@ -22,6 +23,21 @@ def test_unwrap_on_uncompiled_is_identity():
 
 def test_unwrap_handles_none():
     assert unwrap_compiled(None) is None
+
+
+def test_uses_cuda_graphs_false_when_disabled():
+    assert uses_cuda_graphs(None) is False
+    assert uses_cuda_graphs({"enabled": False}) is False
+    assert uses_cuda_graphs({"enabled": True, "mode": "default"}) is False
+
+
+def test_uses_cuda_graphs_true_for_cuda_graph_modes():
+    assert uses_cuda_graphs({"enabled": True, "mode": "reduce-overhead"}) is True
+    assert uses_cuda_graphs({"enabled": True, "mode": "max-autotune"}) is True
+
+
+def test_uses_cuda_graphs_false_for_no_cudagraphs_mode():
+    assert uses_cuda_graphs({"enabled": True, "mode": "max-autotune-no-cudagraphs"}) is False
 
 
 def test_maybe_compile_disabled_is_passthrough():
