@@ -61,7 +61,6 @@ training:
   compile:
     enabled: false
     # mode: default            # default | reduce-overhead | max-autotune
-    # dynamic: false
     # fullgraph: false
 
 loss:

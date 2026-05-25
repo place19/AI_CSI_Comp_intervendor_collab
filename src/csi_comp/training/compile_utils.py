@@ -40,7 +40,9 @@ def maybe_compile(
     """Compile `module` according to a yaml `training.compile` block.
 
     Returns the module unchanged when the cfg is missing, disabled, or the
-    input is `None`. Forwards `mode` / `dynamic` / `fullgraph` when present.
+    input is `None`. Forwards `mode` / `fullgraph` when present.
+    dynamic is always False: DataLoader batches are fixed-size and CUDA
+    Graph-based modes (reduce-overhead, max-autotune) require static shapes.
     """
     if module is None:
         return None
@@ -48,11 +50,9 @@ def maybe_compile(
         return module
     if not hasattr(torch, "compile"):
         return module
-    kw: dict[str, Any] = {}
+    kw: dict[str, Any] = {"dynamic": False}
     if "mode" in compile_cfg:
         kw["mode"] = compile_cfg["mode"]
-    if "dynamic" in compile_cfg:
-        kw["dynamic"] = bool(compile_cfg["dynamic"])
     if "fullgraph" in compile_cfg:
         kw["fullgraph"] = bool(compile_cfg["fullgraph"])
     return torch.compile(module, **kw)

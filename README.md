@@ -24,7 +24,7 @@ Built around a config-driven, registry-based block system so new encoders/decode
 - **Data formats**: raw int8 LMDB (`lmdb_raw`) and single-file `.npz` (`npz`). `D` (int8 CSI) is the only required array; `Z`/`Zq` (latent arrays) are optional and only needed for `decoder_only` mode or latent-space losses. Datasets emit a separate `real_target`/`imag_target` pair offset by `target_offset` (default `1/256`) to model the 3GPP/HW int8 floor-quantization bin midpoint.
 - **DataLoader knobs from YAML**: `num_workers`, `pin_memory`, `prefetch_factor`, `persistent_workers`, `drop_last` plus per-split `train_loader` / `val_loader` overrides.
 - **Mixed precision (AMP)**: `training.amp.{enabled, dtype}` wraps the forward in `torch.amp.autocast` for train + val. Two fp32 islands are baked in — loss computation and MHA softmax — to prevent backprop blow-ups seen under naive fp16. `GradScaler` is only constructed for cuda + fp16.
-- **`torch.compile`** (optional): `training.compile.{enabled, mode, dynamic, fullgraph}` compiles encoder and decoder separately (quantizer stays uncompiled — STE backward is hostile to graph capture). Checkpoints save the underlying `_orig_mod` state_dict so disk files load cleanly into compiled or uncompiled inference builds.
+- **`torch.compile`** (optional): `training.compile.{enabled, mode, fullgraph}` compiles encoder and decoder separately (quantizer stays uncompiled — STE backward is hostile to graph capture). Dynamic shapes are always disabled (`dynamic=False`) since DataLoader batches are fixed-size and CUDA Graph-based modes require static shapes. Checkpoints save the underlying `_orig_mod` state_dict so disk files load cleanly into compiled or uncompiled inference builds.
 - **ONNX export**: encoder alone, encoder + quantizer, decoder alone, or full autoencoder. Conv↔BN / Linear↔BN1d folds are applied in-place on a deep copy before export (driven by each block's `fusion_pairs` metadata), so the exported graph matches the profiler's "fused inference model" accounting. `--no-fuse` keeps the unfused graph for debugging. Encoder-facing scopes accept a single **`input`** tensor (CNN: `(1, 2, S, P)` channels `[imag, real]`; Transformer: `(1, S, 2P)` interleaved `[i₀, r₀, i₁, r₁, …]`), bypassing the LayoutAdapter in the exported graph. AMP fp32 casts around MHA softmax are omitted — inference is always fp32.
 - **Reproducibility**: fixed seeds; config + resolved config + checkpoints serialized together.
 
@@ -266,7 +266,6 @@ training:
   compile:
     enabled: false
     # mode: default                  # default | reduce-overhead | max-autotune
-    # dynamic: false
     # fullgraph: false
 
 loss:
