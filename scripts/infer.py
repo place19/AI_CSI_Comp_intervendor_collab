@@ -167,7 +167,7 @@ def main() -> int:
         )
         from csi_comp.training import (
             build_val_loader, build_model, compile_autoencoder_inplace,
-            configure_device, get_mode_spec, seed_everything,
+            configure_device, get_mode_spec, seed_everything, uses_cuda_graphs,
         )
         from csi_comp.training.checkpoint import load_checkpoint
 
@@ -183,6 +183,7 @@ def main() -> int:
         compile_autoencoder_inplace(ae, cfg["training"].get("compile"))
         ae.to(device).eval()
         mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))
+        _use_cuda_graphs = uses_cuda_graphs(cfg["training"].get("compile"))
     else:
         # --- single checkpoint mode ---
         sd = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
@@ -205,7 +206,7 @@ def main() -> int:
         )
         from csi_comp.training import (
             build_val_loader, build_model, compile_autoencoder_inplace,
-            configure_device, get_mode_spec, seed_everything,
+            configure_device, get_mode_spec, seed_everything, uses_cuda_graphs,
         )
         from csi_comp.training.checkpoint import load_checkpoint
 
@@ -219,6 +220,7 @@ def main() -> int:
         compile_autoencoder_inplace(ae, cfg["training"].get("compile"))
         ae.to(device).eval()
         mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))
+        _use_cuda_graphs = uses_cuda_graphs(cfg["training"].get("compile"))
 
     val_loader = build_val_loader(cfg["data"])
 
@@ -244,6 +246,9 @@ def main() -> int:
 
             if spec.needs_encoder:
                 latent = ae.encoder(real, imag)
+                # Clone before decoder: encoder/decoder CUDA Graph pools may overlap.
+                if _use_cuda_graphs:
+                    latent = latent.clone()
                 q_latent = ae.quantizer(latent) if ae.quantizer is not None else latent
                 if mask_spec is not None and ae.decoder is not None:
                     if mask_spec.mode == "half":
