@@ -14,6 +14,7 @@ Input convention for encoder-facing scopes:
 from __future__ import annotations
 
 import copy
+import inspect
 import types
 from pathlib import Path
 from typing import Tuple
@@ -213,6 +214,10 @@ def export_to_onnx(
 
     inputs = _example_inputs(cfg["data"], latent_shape, scope)
     wrapper.eval()
+    # dynamo= was added in PyTorch 2.2; omit on 2.1.x to avoid TypeError.
+    _export_kw: dict = {}
+    if "dynamo" in inspect.signature(torch.onnx.export).parameters:
+        _export_kw["dynamo"] = False
     torch.onnx.export(
         wrapper,
         inputs,
@@ -221,7 +226,7 @@ def export_to_onnx(
         output_names=["output"],
         opset_version=opset,
         dynamic_axes=_dynamic_axes(scope, dynamic_shape, layout=layout),
-        dynamo=False,
+        **_export_kw,
     )
     return out_path
 
