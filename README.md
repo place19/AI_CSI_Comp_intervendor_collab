@@ -341,7 +341,7 @@ The same pattern (`@register("loss"|"quantizer"|"dataset"|"scheduler", "...")`) 
 ## Testing
 
 ```bash
-pytest                # full suite (341 tests)
+pytest                # full suite (344 tests)
 pytest tests/test_amp.py tests/test_compile.py tests/test_onnx_fuse.py -v
 pytest tests/test_latent_mask.py -v   # latent masking unit + integration tests
 ```
@@ -377,7 +377,7 @@ src/csi_comp/
 
 scripts/                 # train.py, test.py, export_onnx.py, infer.py
 configs/                 # examples/
-tests/                   # pytest suite (341 tests)
+tests/                   # pytest suite (344 tests)
 ```
 
 ---
