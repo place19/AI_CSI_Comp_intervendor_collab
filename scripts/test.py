@@ -1,4 +1,4 @@
-"""Evaluate a checkpoint on the val split.
+"""Evaluate a checkpoint on the val split or a supplied data path.
 
     # single checkpoint
     python scripts/test.py --checkpoint outputs/<run>/best.pt
@@ -101,6 +101,11 @@ def main() -> int:
     )
     from csi_comp.training.checkpoint import load_checkpoint
 
+    # --data-path is a shortcut for --set data.val_path=...; applied before
+    # user --set overrides so explicit --set data.val_path=... wins.
+    if args.data_path is not None:
+        args.overrides = [f"data.val_path={args.data_path}"] + args.overrides
+
     if args.encoder_checkpoint and args.decoder_checkpoint:
         # --- cross-checkpoint mode ---
         enc_sd = torch.load(args.encoder_checkpoint, map_location="cpu", weights_only=False)
@@ -150,9 +155,6 @@ def main() -> int:
         compile_autoencoder_inplace(ae, cfg["training"].get("compile"))
         amp_spec = resolve_amp_cfg(cfg["training"].get("amp"), device)
         mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))
-
-    if args.data_path is not None:
-        cfg["data"]["val_path"] = str(args.data_path)
 
     val_loader = build_val_loader(cfg["data"])
     loss_fn = WeightedSumLoss(cfg["loss"]["terms"], mode=mode)
