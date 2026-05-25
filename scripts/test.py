@@ -1,12 +1,22 @@
 """Evaluate a checkpoint on the val split.
 
-    # single checkpoint (existing)
+    # single checkpoint
     python scripts/test.py --checkpoint outputs/<run>/best.pt
+
+    # single checkpoint with a specific test dataset
+    python scripts/test.py --checkpoint outputs/<run>/best.pt \\
+        --data-path /path/to/test_data.npz
 
     # cross-checkpoint: encoder and decoder from separate checkpoints
     python scripts/test.py \\
         --encoder-checkpoint outputs/<enc_run>/best.pt \\
         --decoder-checkpoint outputs/<dec_run>/best.pt
+
+    # cross-checkpoint with a specific test dataset
+    python scripts/test.py \\
+        --encoder-checkpoint outputs/<enc_run>/best.pt \\
+        --decoder-checkpoint outputs/<dec_run>/best.pt \\
+        --data-path /path/to/test_data.npz
 """
 from __future__ import annotations
 
@@ -37,6 +47,8 @@ def _parse_args() -> argparse.Namespace:
         metavar="KEY=VALUE",
         help="override a config key (repeatable)",
     )
+    ap.add_argument("--data-path", type=Path, default=None,
+                    help="override the validation data path from the checkpoint config")
     ap.add_argument("--device", choices=("cpu", "cuda", "mps"), default=None)
     ap.add_argument("--gpu-index", type=int, default=None)
     args = ap.parse_args()
@@ -138,6 +150,9 @@ def main() -> int:
         compile_autoencoder_inplace(ae, cfg["training"].get("compile"))
         amp_spec = resolve_amp_cfg(cfg["training"].get("amp"), device)
         mask_spec = parse_latent_mask_spec(cfg["model"].get("latent_mask"))
+
+    if args.data_path is not None:
+        cfg["data"]["val_path"] = str(args.data_path)
 
     val_loader = build_val_loader(cfg["data"])
     loss_fn = WeightedSumLoss(cfg["loss"]["terms"], mode=mode)

@@ -132,10 +132,20 @@ python scripts/train.py \
 # Evaluate — single checkpoint
 python scripts/test.py --checkpoint outputs/<run>/best.pt
 
+# Evaluate — single checkpoint with a specific test dataset
+python scripts/test.py --checkpoint outputs/<run>/best.pt \
+  --data-path /path/to/test_data.npz
+
 # Evaluate — cross-checkpoint: encoder and decoder from separate runs
 python scripts/test.py \
   --encoder-checkpoint outputs/<enc_run>/best.pt \
   --decoder-checkpoint outputs/<dec_run>/best.pt
+
+# Evaluate — cross-checkpoint with a specific test dataset
+python scripts/test.py \
+  --encoder-checkpoint outputs/<enc_run>/best.pt \
+  --decoder-checkpoint outputs/<dec_run>/best.pt \
+  --data-path /path/to/test_data.npz
 
 # Export to ONNX (encoder, encoder_quant, decoder, full)
 python scripts/export_onnx.py \
