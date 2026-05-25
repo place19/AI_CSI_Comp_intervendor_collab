@@ -172,7 +172,8 @@ def main() -> int:
         amp_spec=amp_spec,
         mask_spec=mask_spec,
     )
-    val_metrics = trainer.validate()
+    prefix = "test" if args.data_path is not None else "val"
+    val_metrics = trainer.validate(prefix=prefix)
     for k, v in sorted(val_metrics.items()):
         print(f"{k}: {v:.6f}")
     return 0

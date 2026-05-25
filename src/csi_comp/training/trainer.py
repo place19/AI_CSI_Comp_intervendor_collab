@@ -214,7 +214,7 @@ class Trainer:
         return {k: v / max(counts, 1) for k, v in totals.items()}
 
     @torch.no_grad()
-    def validate(self) -> Dict[str, float]:
+    def validate(self, prefix: str = "val") -> Dict[str, float]:
         self.model.eval()
         totals: Dict[str, float] = {}
         counts = 0
@@ -229,13 +229,13 @@ class Trainer:
             total, per_term = self.loss_fn(pred_pack, target_pack)
             m = self._collect_step_metrics(total, per_term, pred_pack, target_pack)
             # `lr` reflects the optimizer state, not the validation batch — drop
-            # it so we don't log a meaningless `val/lr`.
+            # it so we don't log a meaningless prefixed lr metric.
             for k, v in m.items():
                 if k == "lr" or k.startswith("lr/"):
                     continue
                 totals[k] = totals.get(k, 0.0) + v
             counts += 1
-        return {f"val/{k}": v / max(counts, 1) for k, v in totals.items()}
+        return {f"{prefix}/{k}": v / max(counts, 1) for k, v in totals.items()}
 
     def _collect_step_metrics(
         self,
