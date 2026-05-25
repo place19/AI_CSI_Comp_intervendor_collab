@@ -119,7 +119,10 @@ def test_build_note_contains_table_and_config():
     assert "Decoder" in note
     assert "in_shape" in note
     assert "TOTAL" in note
-    assert "max_subband" in note  # cfg made it into the note
+    assert "Summary" in note       # top-level params/FLOPs summary table
+    assert "max_subband" in note   # cfg made it into the note
+    # Profile section must appear before Configuration section.
+    assert note.index("Model profile") < note.index("Configuration")
 
 
 def test_mlflow_logger_local_file_uri(tmp_path, make_npz):
