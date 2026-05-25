@@ -223,6 +223,9 @@ class Trainer:
                 pred_pack, target_pack = _batch_to_io(
                     self.model, batch, self.mode_spec, self.device, self.mask_spec
                 )
+            # Clone to detach from CUDAGraph output buffers (reduce-overhead / max-autotune reuse them).
+            pred_pack = {k: v.clone() if isinstance(v, torch.Tensor) else v
+                         for k, v in pred_pack.items()}
             # Loss + metrics in fp32, matching the training path.
             pred_pack = _to_fp32_pack(pred_pack)
             target_pack = _to_fp32_pack(target_pack)
