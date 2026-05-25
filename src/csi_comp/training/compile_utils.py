@@ -58,6 +58,17 @@ def maybe_compile(
     return torch.compile(module, **kw)
 
 
+def uses_cuda_graphs(compile_cfg: Optional[dict[str, Any]]) -> bool:
+    """Return True when the compile config activates CUDA Graphs.
+
+    Only reduce-overhead and max-autotune use CUDA Graphs; those modes require
+    clone() guards around encoder/decoder output buffers to prevent aliasing.
+    """
+    if not compile_cfg or not compile_cfg.get("enabled", False):
+        return False
+    return compile_cfg.get("mode", "default") in ("reduce-overhead", "max-autotune")
+
+
 def compile_autoencoder_inplace(ae: nn.Module, compile_cfg: Optional[dict[str, Any]]) -> None:
     """Apply `maybe_compile` to `ae.encoder` and `ae.decoder` in-place.
 

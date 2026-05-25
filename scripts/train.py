@@ -49,6 +49,7 @@ def main() -> int:
         ConsoleCallback, Trainer, build_dataloaders, build_model,
         build_optimizer, build_scheduler, compile_autoencoder_inplace,
         configure_device, get_mode_spec, resolve_amp_cfg, seed_everything,
+        uses_cuda_graphs,
     )
     from csi_comp.training.checkpoint import CheckpointCallback, load_checkpoint
     from csi_comp.training.mlflow_logger import MLflowCallback, MLflowLogger
@@ -129,6 +130,7 @@ def main() -> int:
             best_metric=cfg["training"].get("best_metric", {"name": "sgcs", "mode": "max"}),
             amp_spec=amp_spec,
             mask_spec=mask_spec,
+            use_cuda_graphs=uses_cuda_graphs(cfg["training"].get("compile")),
         )
         trainer.fit()
 

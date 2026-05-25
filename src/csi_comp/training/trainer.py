@@ -27,6 +27,7 @@ def _batch_to_io(
     mode_spec: ModeSpec,
     device: torch.device,
     mask_spec: Optional[LatentMaskSpec] = None,
+    use_cuda_graphs: bool = False,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     real = batch["real"].to(device)
     imag = batch["imag"].to(device)
@@ -47,7 +48,8 @@ def _batch_to_io(
         if mask_spec is not None and mode_spec.needs_decoder:
             latent = ae.encoder(real, imag)
             # Clone before decoder: encoder/decoder CUDA Graph pools may overlap.
-            latent = latent.clone()
+            if use_cuda_graphs:
+                latent = latent.clone()
             q_latent = ae.quantizer(latent) if ae.quantizer is not None else latent
             if mask_spec.mode == "half":
                 masked = apply_latent_mask(q_latent, mask_spec.mask_ratio)
@@ -60,7 +62,8 @@ def _batch_to_io(
             elif mask_spec.mode == "dual":
                 recon_full = ae.decoder(q_latent) if ae.decoder is not None else None
                 # Clone before second decoder run overwrites the first output buffer.
-                recon_full = recon_full.clone() if recon_full is not None else None
+                if use_cuda_graphs and recon_full is not None:
+                    recon_full = recon_full.clone()
                 masked = apply_latent_mask(q_latent, mask_spec.mask_ratio)
                 recon_half = ae.decoder(masked) if ae.decoder is not None else None
                 out = {
@@ -139,6 +142,7 @@ class Trainer:
     best_metric: dict[str, Any] = field(default_factory=lambda: {"name": "sgcs", "mode": "max"})
     amp_spec: Optional[AmpSpec] = None
     mask_spec: Optional[LatentMaskSpec] = None
+    use_cuda_graphs: bool = False
 
     # Runtime state
     epoch: int = 0
@@ -190,7 +194,8 @@ class Trainer:
             # Model forward under autocast (when AMP enabled).
             with autocast_ctx(self.amp_spec):
                 pred_pack, target_pack = _batch_to_io(
-                    self.model, batch, self.mode_spec, self.device, self.mask_spec
+                    self.model, batch, self.mode_spec, self.device, self.mask_spec,
+                    self.use_cuda_graphs,
                 )
             # Loss runs OUTSIDE autocast — fp32 island. Cast any fp tensors back
             # to fp32 first so the loss never sees half/bf16 inputs.
@@ -225,11 +230,13 @@ class Trainer:
         for batch in self.val_loader:  # type: ignore[union-attr]
             with autocast_ctx(self.amp_spec):
                 pred_pack, target_pack = _batch_to_io(
-                    self.model, batch, self.mode_spec, self.device, self.mask_spec
+                    self.model, batch, self.mode_spec, self.device, self.mask_spec,
+                    self.use_cuda_graphs,
                 )
             # Clone to detach from CUDAGraph output buffers (reduce-overhead / max-autotune reuse them).
-            pred_pack = {k: v.clone() if isinstance(v, torch.Tensor) else v
-                         for k, v in pred_pack.items()}
+            if self.use_cuda_graphs:
+                pred_pack = {k: v.clone() if isinstance(v, torch.Tensor) else v
+                             for k, v in pred_pack.items()}
             # Loss + metrics in fp32, matching the training path.
             pred_pack = _to_fp32_pack(pred_pack)
             target_pack = _to_fp32_pack(target_pack)
