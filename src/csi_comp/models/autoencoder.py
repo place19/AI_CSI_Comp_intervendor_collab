@@ -38,6 +38,9 @@ class Autoencoder(nn.Module):
                 "the trainer feeds latent_target directly and never calls forward()."
             )
         latent = self.encoder(real, imag)
+        # Clone before decoder: encoder/decoder CUDA Graph pools may overlap.
+        if self.decoder is not None:
+            latent = latent.clone()
         q_latent = self.quantizer(latent) if self.quantizer is not None else latent
         recon = self.decoder(q_latent) if self.decoder is not None else None
         return {"latent": latent, "quantized_latent": q_latent, "recon": recon}
