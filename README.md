@@ -164,6 +164,20 @@ python scripts/infer.py \
   --data-path /path/to/data.npz
 ```
 
+`test.py` and `infer.py` inherit `training.amp` and `training.compile` from the embedded checkpoint config. To evaluate in strict fp32 without compile, override them on the CLI:
+
+```bash
+python scripts/test.py --checkpoint outputs/<run>/best.pt \
+  --set training.amp.enabled=false \
+  --set training.compile.enabled=false
+
+python scripts/infer.py --checkpoint outputs/<run>/best.pt \
+  --set training.amp.enabled=false \
+  --set training.compile.enabled=false
+```
+
+> `training.compile.enabled=false` is sufficient on its own — `mode` and `fullgraph` are ignored when compile is disabled.
+
 ---
 
 ## Configuration cheat sheet
