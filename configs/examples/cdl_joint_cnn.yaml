@@ -47,9 +47,12 @@ model:
 quantizer:
   type: uniform
   bits: 2
-  value_range: [-1.0, 1.0]
+  value_range: [-1.0, 1.0]    # decoder input range; quantization levels defined here
   unit_spaced: true
   grad: ste
+  # encoder_value_range: [-1.0, 1.0]  # optional; encoder output range (e.g. tanh → [-1,1],
+  #                                    # sigmoid → [0,1]). When set, a linear transform maps
+  #                                    # encoder output → value_range before quantization.
 
 training:
   mode: joint

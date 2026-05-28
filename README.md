@@ -226,7 +226,7 @@ model:
     # build_encoder does NOT auto-append a head; the last block's output is the
     # latent that feeds the quantizer. End with a bounded activation
     # (e.g. {name: activation, activation: tanh}) to keep the latent inside
-    # the quantizer's value_range.
+    # encoder_value_range (when set) or value_range (when not set).
     blocks:
       - { name: dw_sep_conv, out_channels: 16, kernel: 3 }
       - name: residual
@@ -256,9 +256,12 @@ model:
 quantizer:
   type: uniform
   bits: 2
-  value_range: [-1.0, 1.0]
+  value_range: [-1.0, 1.0]          # decoder input range; quantization levels defined here
   unit_spaced: true
   grad: ste                          # ste | soft | hard
+  # encoder_value_range: [-1.0, 1.0] # optional; encoder output range (e.g. tanh → [-1,1],
+  #                                   # sigmoid → [0,1]). A linear transform maps encoder output
+  #                                   # → value_range before quantization. Omit when the same.
 
 training:
   mode: joint                        # see "Inter-vendor modes" above
@@ -355,7 +358,7 @@ The same pattern (`@register("loss"|"quantizer"|"dataset"|"scheduler", "...")`) 
 ## Testing
 
 ```bash
-pytest                # full suite (344 tests)
+pytest                # full suite (353 tests)
 pytest tests/test_amp.py tests/test_compile.py tests/test_onnx_fuse.py -v
 pytest tests/test_latent_mask.py -v   # latent masking unit + integration tests
 ```
@@ -391,7 +394,7 @@ src/csi_comp/
 
 scripts/                 # train.py, test.py, export_onnx.py, infer.py
 configs/                 # examples/
-tests/                   # pytest suite (344 tests)
+tests/                   # pytest suite (353 tests)
 ```
 
 ---

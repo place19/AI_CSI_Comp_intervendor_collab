@@ -1,7 +1,7 @@
 """Quantizer module: snap-to-nearest with a pluggable gradient strategy."""
 from __future__ import annotations
 
-from typing import Any, Mapping, Tuple, Union
+from typing import Any, Mapping, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -41,6 +41,11 @@ class Quantizer(nn.Module):
 
     Gradient behaviour is delegated to a `grad` strategy module registered under
     `registry['grad']` (e.g. 'ste', 'soft', 'hard').
+
+    When `encoder_value_range` differs from `value_range`, a linear transform is
+    applied to the encoder output before quantization so that the quantization
+    levels (defined in `value_range`) align with the decoder's expected input range.
+    The quantizer output is always in `value_range` regardless of input range.
     """
 
     levels: torch.Tensor
@@ -52,6 +57,7 @@ class Quantizer(nn.Module):
         unit_spaced: bool = True,
         grad: Union[str, Mapping[str, Any]] = "ste",
         type: str = "uniform",
+        encoder_value_range: Optional[Tuple[float, float]] = None,
     ):
         super().__init__()
         self.bits = int(bits)
@@ -60,6 +66,21 @@ class Quantizer(nn.Module):
         self.type = type
         levels = build_levels(type, bits, value_range, unit_spaced)
         self.register_buffer("levels", levels)
+
+        # Linear transform: encoder output range → decoder input range (value_range).
+        # Precompute scalar alpha/beta so forward is a single fused multiply-add.
+        if encoder_value_range is not None:
+            enc_lo, enc_hi = float(encoder_value_range[0]), float(encoder_value_range[1])
+            if enc_hi <= enc_lo:
+                raise ValueError(f"bad encoder_value_range: {encoder_value_range}")
+            dec_lo, dec_hi = self.value_range
+            self.encoder_value_range: Optional[Tuple[float, float]] = (enc_lo, enc_hi)
+            self._alpha: Optional[float] = (dec_hi - dec_lo) / (enc_hi - enc_lo)
+            self._beta: Optional[float] = dec_lo - enc_lo * self._alpha
+        else:
+            self.encoder_value_range = None
+            self._alpha = None
+            self._beta = None
 
         if isinstance(grad, str):
             grad_cfg: dict[str, Any] = {"name": grad}
@@ -70,6 +91,8 @@ class Quantizer(nn.Module):
         self.grad = reg_get("grad", grad_name)(**grad_cfg)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self._alpha is not None:
+            x = self._alpha * x + self._beta
         return self.grad(x, self.levels)
 
     def to_hard(self) -> "Quantizer":

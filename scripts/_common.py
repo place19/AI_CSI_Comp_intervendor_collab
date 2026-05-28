@@ -108,6 +108,10 @@ def check_quantizer_compat(enc_q: dict, dec_q: dict) -> None:
 
     Absent keys are filled with their effective defaults before comparison so
     that ``{}`` and ``{"unit_spaced": True}`` are treated as identical.
+
+    ``encoder_value_range`` is intentionally excluded from the check: it is an
+    encoder-side implementation detail (linear transform before quantization) and
+    does not affect the decoder's expected input range (``value_range``).
     """
     fields = ["type", "bits", "value_range", "unit_spaced"]
     mismatches = []

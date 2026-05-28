@@ -251,6 +251,13 @@ def test_check_quantizer_compat_default_normalization():
         {"type": "uniform", "bits": 4, "value_range": [-1.0, 1.0]},
     )
 
+    # encoder_value_range is an encoder-side detail and must NOT trigger a mismatch.
+    check_quantizer_compat(
+        {"type": "uniform", "bits": 2, "value_range": [-1.0, 1.0],
+         "encoder_value_range": [0.0, 1.0]},
+        {"type": "uniform", "bits": 2, "value_range": [-1.0, 1.0]},
+    )
+
     # Actual mismatch must still raise.
     with pytest.raises(ValueError, match="bits"):
         check_quantizer_compat(
