@@ -191,7 +191,7 @@ class Trainer:
             getattr(self.model, name).eval()
 
         totals: Dict[str, float] = {}
-        counts: int = 0
+        n_samples: int = 0
         for batch in self.train_loader:
             # Model forward under autocast (when AMP enabled).
             with autocast_ctx(self.amp_spec):
@@ -219,16 +219,20 @@ class Trainer:
             self.global_step += 1
             step_metrics = self._collect_step_metrics(total, per_term, pred_pack, target_pack)
             self._dispatch("on_train_step_end", self.global_step, step_metrics)
+            # Sample-count weighting: a small final batch (drop_last=false) must not
+            # carry the same weight as a full one. An unweighted batch-mean-of-means
+            # otherwise drifts from the true dataset mean.
+            bs = int(batch["real"].shape[0])
             for k, v in step_metrics.items():
-                totals[k] = totals.get(k, 0.0) + v
-            counts += 1
-        return {k: v / max(counts, 1) for k, v in totals.items()}
+                totals[k] = totals.get(k, 0.0) + v * bs
+            n_samples += bs
+        return {k: v / max(n_samples, 1) for k, v in totals.items()}
 
     @torch.no_grad()
     def validate(self, prefix: str = "val") -> Dict[str, float]:
         self.model.eval()
         totals: Dict[str, float] = {}
-        counts = 0
+        n_samples = 0
         for batch in self.val_loader:  # type: ignore[union-attr]
             with autocast_ctx(self.amp_spec):
                 pred_pack, target_pack = _batch_to_io(
@@ -246,12 +250,13 @@ class Trainer:
             m = self._collect_step_metrics(total, per_term, pred_pack, target_pack)
             # `lr` reflects the optimizer state, not the validation batch — drop
             # it so we don't log a meaningless prefixed lr metric.
+            bs = int(batch["real"].shape[0])
             for k, v in m.items():
                 if k == "lr" or k.startswith("lr/"):
                     continue
-                totals[k] = totals.get(k, 0.0) + v
-            counts += 1
-        return {f"{prefix}/{k}": v / max(counts, 1) for k, v in totals.items()}
+                totals[k] = totals.get(k, 0.0) + v * bs
+            n_samples += bs
+        return {f"{prefix}/{k}": v / max(n_samples, 1) for k, v in totals.items()}
 
     def _collect_step_metrics(
         self,
