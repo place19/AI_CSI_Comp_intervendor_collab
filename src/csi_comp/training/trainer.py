@@ -221,12 +221,17 @@ class Trainer:
             self._dispatch("on_train_step_end", self.global_step, step_metrics)
             # Sample-count weighting: a small final batch (drop_last=false) must not
             # carry the same weight as a full one. An unweighted batch-mean-of-means
-            # otherwise drifts from the true dataset mean.
+            # otherwise drifts from the true dataset mean. `lr` is an optimizer-step
+            # metric (not a sample metric), so skip it here and report the final LR.
             bs = int(batch["real"].shape[0])
             for k, v in step_metrics.items():
+                if k == "lr" or k.startswith("lr/"):
+                    continue
                 totals[k] = totals.get(k, 0.0) + v * bs
             n_samples += bs
-        return {k: v / max(n_samples, 1) for k, v in totals.items()}
+        result = {k: v / max(n_samples, 1) for k, v in totals.items()}
+        result["lr"] = float(self.optimizer.param_groups[0]["lr"])
+        return result
 
     @torch.no_grad()
     def validate(self, prefix: str = "val") -> Dict[str, float]:
