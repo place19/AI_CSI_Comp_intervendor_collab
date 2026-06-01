@@ -150,6 +150,10 @@ class Trainer:
     epoch: int = 0
     global_step: int = 0
     best_value: float = float("nan")
+    # The current epoch's validation value for `best_metric` (NaN when validation
+    # did not run this epoch). Distinct from `best_value` (best-so-far); used to
+    # name the latest checkpoint after the epoch it actually describes.
+    last_val_value: float = float("nan")
 
     def __post_init__(self):
         self.model.to(self.device)
@@ -167,11 +171,15 @@ class Trainer:
         self._dispatch("on_train_begin")
         for epoch in range(self.epoch, self.epochs):
             self.epoch = epoch
+            self.last_val_value = float("nan")  # reset; set below iff validation runs
             self._dispatch("on_epoch_begin", epoch)
             train_metrics = self._train_one_epoch()
             self._dispatch("on_epoch_end", epoch, train_metrics)
             if self.val_loader is not None and (epoch + 1) % self.val_every_n_epochs == 0:
                 val_metrics = self.validate()
+                self.last_val_value = val_metrics.get(
+                    f"val/{self.best_metric['name']}", float("nan")
+                )
                 self._update_best(val_metrics)
                 self._dispatch("on_val_end", epoch, val_metrics)
             # Epoch-unit schedulers step here. Iter-unit ones already stepped inside the loop.

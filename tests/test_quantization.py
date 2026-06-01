@@ -62,6 +62,29 @@ def test_quantizer_hard_no_grad_path():
     assert torch.allclose(y, torch.tensor([0.25, -0.75, 0.75]))
 
 
+def test_soft_quantizer_hard_snaps_in_eval():
+    # In eval, a soft quantizer must hard-snap (deployed behaviour), not emit the
+    # continuous softmax blend it uses during training.
+    q = Quantizer(bits=2, value_range=(-1.0, 1.0), grad={"name": "soft", "temperature": 1.0})
+    x = torch.tensor([0.4, -0.6, 0.9])
+    # train mode: continuous blend, generally != snapped values
+    q.train()
+    assert not torch.allclose(q(x), torch.tensor([0.25, -0.75, 0.75]), atol=1e-3)
+    # eval mode: exact hard snap regardless of the soft strategy
+    q.eval()
+    assert torch.allclose(q(x), torch.tensor([0.25, -0.75, 0.75]))
+
+
+def test_eval_snap_matches_bruteforce_many_bits():
+    # The rounding-based snap must agree with a brute-force argmin nearest for a
+    # large level set on random inputs (well outside the range too).
+    levels = build_uniform(bits=6, value_range=(-2.0, 2.0))
+    x = torch.randn(5000) * 3.0
+    got = snap_to_nearest(x, levels)
+    bf = levels[(x.unsqueeze(-1) - levels).abs().argmin(dim=-1)]
+    assert torch.equal(got, bf)
+
+
 def test_quantizer_to_hard_swaps_grad():
     q = Quantizer(bits=2, value_range=(-1.0, 1.0), grad="ste")
     assert q.grad_name == "ste"

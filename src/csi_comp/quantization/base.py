@@ -28,10 +28,24 @@ def build_levels(
 
 
 def snap_to_nearest(x: torch.Tensor, levels: torch.Tensor) -> torch.Tensor:
-    """Map each element of x to the closest entry of `levels` (1-D, sorted)."""
-    # (..., 1) - (N,)  →  (..., N)
-    sq = (x.unsqueeze(-1) - levels) ** 2
-    idx = sq.argmin(dim=-1)
+    """Map each element of x to the closest entry of `levels`.
+
+    Assumes **uniformly-spaced ascending** levels (as produced by `build_uniform`
+    — the only supported case). Computes the nearest index by rounding instead of
+    materialising the full ``(..., N_levels)`` squared-distance tensor, so peak
+    memory stays O(numel(x)) regardless of bit-width (the old argmin form was
+    O(numel(x) * 2**bits)). Uses `ceil(z - 0.5)` rather than `round` so exact ties
+    resolve to the lower level — matching the previous ``argmin`` (first-minimum)
+    behaviour — and so it stays ONNX-exportable (`searchsorted` is not, and
+    `round` is banker's-rounding which would break ties differently). Output keeps
+    `levels`' dtype.
+    """
+    # build_uniform guarantees >= 2 levels (bits >= 1), so levels[1] is always valid.
+    xf = x.to(levels.dtype)
+    step = levels[1] - levels[0]
+    # z = position of x on the level grid; ceil(z - 0.5) = round-half-down.
+    idx = torch.ceil((xf - levels[0]) / step - 0.5)
+    idx = idx.clamp(0, levels.numel() - 1).to(torch.long)
     return levels[idx]
 
 
@@ -46,6 +60,13 @@ class Quantizer(nn.Module):
     applied to the encoder output before quantization so that the quantization
     levels (defined in `value_range`) align with the decoder's expected input range.
     The quantizer output is always in `value_range` regardless of input range.
+
+    Eval vs. train: in **eval mode** (`self.training is False`) the forward always
+    hard-snaps to the nearest level, regardless of the configured `grad` strategy.
+    This keeps validation / test / inference faithful to the deployed (hard)
+    quantizer — otherwise a `soft` quantizer would emit continuous, un-snapped
+    values at eval and overstate SGCS. STE/hard already produce the snapped value
+    in forward, so this is value-identical for them; only `soft` changes at eval.
     """
 
     levels: torch.Tensor
@@ -93,7 +114,10 @@ class Quantizer(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self._alpha is not None:
             x = self._alpha * x + self._beta
-        return self.grad(x, self.levels)
+        if self.training:
+            return self.grad(x, self.levels)
+        # Eval / inference: hard-snap regardless of grad strategy (see class docstring).
+        return snap_to_nearest(x, self.levels)
 
     def to_hard(self) -> "Quantizer":
         """Swap the gradient strategy to the hard / no-grad path. Used for ONNX export."""

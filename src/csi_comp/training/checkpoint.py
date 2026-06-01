@@ -154,8 +154,12 @@ class CheckpointCallback:
         # Fires after validation, best update, and epoch-unit scheduler step so
         # latest.pt captures the fully-updated state and resumes cleanly.
         metric_name = trainer.best_metric["name"]
+        # Name the latest checkpoint with THIS epoch's validation value (not the
+        # best-so-far), so the filename describes the epoch it captures. Falls
+        # back to NaN — and thus an epoch-only name — when validation didn't run.
+        latest_value = getattr(trainer, "last_val_value", float("nan"))
         descriptive = self.out_dir / format_latest_filename(
-            trainer.epoch, metric_name, trainer.best_value
+            trainer.epoch, metric_name, latest_value
         )
         save_checkpoint(
             descriptive, trainer.model, trainer.optimizer,

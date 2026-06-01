@@ -11,7 +11,7 @@ Built around a config-driven, registry-based block system so new encoders/decode
 - **Inter-vendor training modes**: `joint`, `encoder_only`, `decoder_only`, `encoder_only_frozen_decoder`.
 - **Registry-based blocks**: CNN, depthwise-separable conv, residual, average pooling, transformer (custom Q/K/V/O with selectable pre/post-LN), positional encoding (fixed sin/cos · learnable random · learnable sin/cos), reshape, linear projection, standalone activation, bounding head, reshape head, complex FFN head (per-branch real/imag projections). Add a new block with a single `@register("block", "name")` decorator.
 - **Fixed-shape forward contract**: every block declares `out_shape` in `__init__` and has a single `forward(x) -> x` signature; the encoder/decoder builder propagates shapes statically. Padding masks live only on the data batch and are consumed by the loss — not threaded through the model.
-- **Configurable quantizer**: uniform quantization with pluggable gradient strategies (STE / soft / hard). Bit-width, range, and level spacing all configurable.
+- **Configurable quantizer**: uniform quantization with pluggable gradient strategies (STE / soft / hard). Bit-width, range, and level spacing all configurable. The chosen `grad` strategy is used only during training — in `eval()` the quantizer always hard-snaps to the nearest level, so validation / `test.py` / `infer.py` reflect the deployed (hard) quantizer (a `soft` quantizer would otherwise emit continuous values at eval and overstate SGCS).
 - **Composite loss**: weighted sum of named loss terms (`one_minus_sgcs`, `mse_latent`, `mse_quantized_latent`, `dual_one_minus_sgcs`, …). Add new terms via the loss registry.
 - **Latent masking** (`model.latent_mask`): zero out the trailing fraction of the quantized latent before the decoder to simulate partial-bandwidth scenarios. Four modes: `full` (disabled), `half` (fixed), `random` (per-sample augmentation), `dual` (decoder called twice; loss is a weighted sum of full- and half-latent reconstructions). Applies only when both encoder and decoder are present (`joint`, `encoder_only_frozen_decoder`); automatically skipped in `encoder_only` and `decoder_only` modes.
 - **Schedulers**: PyTorch built-ins (`cosine`, `step`, `none`) plus a custom `warmup_cosine` (linear warmup → cosine annealing, iteration-unit).
@@ -22,7 +22,7 @@ Built around a config-driven, registry-based block system so new encoders/decode
   - **MLflow** (optional): windowed-mean train metrics, **epoch-indexed validation metrics**, per-run note with full config + per-block FLOPs/params/output shapes, resolved-config artifact. Checkpoints are NOT uploaded — they live only in `outputs/<run>/`.
 - **Devices**: `cpu`, `cuda` (selected via `CUDA_VISIBLE_DEVICES`), `mps` (Apple Silicon). For `test.py` / `infer.py`, `gpu_index` embedded in the checkpoint config cannot be applied before `torch.load()` — pass `--device cuda --gpu-index N` on the CLI to select a specific GPU with these scripts.
 - **Data formats**: raw int8 LMDB (`lmdb_raw`) and single-file `.npz` (`npz`). `D` (int8 CSI) is the only required array; `Z`/`Zq` (latent arrays) are optional and only needed for `decoder_only` mode or latent-space losses. Datasets emit a separate `real_target`/`imag_target` pair offset by `target_offset` (default `1/256`) to model the 3GPP/HW int8 floor-quantization bin midpoint.
-- **Augmented-input training** (`augmented CSI → target CSI`): set optional `data.aug_train_path` / `data.aug_val_path` to feed an augmented (UE-condition) dataset as the **encoder input** while the reconstruction target stays the clean CSI from `train_path` / `val_path`. Omit them for the default `target CSI → target CSI`. Index-aligned, same format + `dataset_args`; only meaningful when the encoder is trained. `test.py` / `infer.py` honour the embedded `aug_val_path` and expose `--aug-data-path` to override it.
+- **Augmented-input training** (`augmented CSI → target CSI`): set optional `data.aug_train_path` / `data.aug_val_path` to feed an augmented (UE-condition) dataset as the **encoder input** while the reconstruction target stays the clean CSI from `train_path` / `val_path`. Omit them for the default `target CSI → target CSI`. Index-aligned, same format + `dataset_args` (latent-related args like `latent_key` / `with_latent` are ignored for the augmented dataset — it only supplies the encoder input, so its file needs no latent arrays); only meaningful when the encoder is trained. `test.py` / `infer.py` honour the embedded `aug_val_path` and expose `--aug-data-path` to override it.
 - **DataLoader knobs from YAML**: `num_workers`, `pin_memory`, `prefetch_factor`, `persistent_workers`, `drop_last` plus per-split `train_loader` / `val_loader` overrides.
 - **Mixed precision (AMP)**: `training.amp.{enabled, dtype}` wraps the forward in `torch.amp.autocast` for train + val. Two fp32 islands are baked in — loss computation and MHA softmax — to prevent backprop blow-ups seen under naive fp16. `GradScaler` is only constructed for cuda + fp16.
 - **`torch.compile`** (optional): `training.compile.{enabled, mode, fullgraph}` compiles encoder and decoder separately (quantizer stays uncompiled — STE backward is hostile to graph capture). Dynamic shapes are always disabled (`dynamic=False`) since DataLoader batches are fixed-size and CUDA Graph-based modes require static shapes. Checkpoints save the underlying `_orig_mod` state_dict so disk files load cleanly into compiled or uncompiled inference builds.
@@ -113,7 +113,9 @@ Both `best.pt` and `latest.pt` are **symlinks** to sibling files whose names
 encode the run state — `best_e{epoch:03d}_{metric}{value:.4f}.pt` /
 `latest_e{epoch:03d}_{metric}{value:.4f}.pt` (e.g. `best_e023_sgcs0.8421.pt`)
 — so you can see at a glance which epoch and metric produced each checkpoint
-without opening it. The stable names keep working for downstream scripts
+without opening it. `best`'s `{value}` is the best-so-far metric; `latest`'s is
+**that epoch's** validation value (or an epoch-only name like `latest_e005.pt`
+when validation didn't run that epoch). The stable names keep working for downstream scripts
 (`test.py`, `infer.py`, `export_onnx.py`). On filesystems that
 refuse symlinks the code falls back to a hardlink, then a copy (copy uses
 double the disk).
@@ -275,7 +277,7 @@ quantizer:
   bits: 2
   value_range: [-1.0, 1.0]          # decoder input range; quantization levels defined here
   unit_spaced: true
-  grad: ste                          # ste | soft | hard
+  grad: ste                          # ste | soft | hard (train-time only; eval always hard-snaps)
   # encoder_value_range: [-1.0, 1.0] # optional; encoder output range (e.g. tanh → [-1,1],
   #                                   # sigmoid → [0,1]). A linear transform maps encoder output
   #                                   # → value_range before quantization. Omit when the same.
@@ -375,7 +377,7 @@ The same pattern (`@register("loss"|"quantizer"|"dataset"|"scheduler", "...")`) 
 ## Testing
 
 ```bash
-pytest                # full suite (361 tests)
+pytest                # full suite (363 tests)
 pytest tests/test_amp.py tests/test_compile.py tests/test_onnx_fuse.py -v
 pytest tests/test_latent_mask.py -v   # latent masking unit + integration tests
 ```
@@ -411,7 +413,7 @@ src/csi_comp/
 
 scripts/                 # train.py, test.py, export_onnx.py, infer.py
 configs/                 # examples/
-tests/                   # pytest suite (361 tests)
+tests/                   # pytest suite (363 tests)
 ```
 
 ---

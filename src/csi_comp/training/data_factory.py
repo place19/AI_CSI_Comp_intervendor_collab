@@ -79,12 +79,24 @@ def _loader_kwargs(loader_cfg: dict[str, Any] | None, *, defaults: dict[str, Any
     return kw
 
 
+# dataset_args that make a dataset *require* a paired latent array. The augmented
+# (encoder-input) dataset only ever supplies `real`/`imag` — PairedInputDataset
+# discards everything else — so these must be stripped before building it.
+# Otherwise `npz` latent_key (raises at init) / `lmdb_raw` with_latent (raises
+# per-sample) would demand latent arrays the aug file need not carry. The two
+# prefix/dtype args only matter alongside with_latent, so they ride along here.
+# (npz `also_expose_z` is left as-is: it never errors — Z is opportunistically
+# exposed if present and harmlessly discarded by PairedInputDataset.)
+_LATENT_DATASET_ARGS = ("latent_key", "with_latent", "latent_key_prefix", "latent_dtype")
+
+
 def _build_dataset(cls, extra: dict[str, Any], path: Any, aug_path: Any):
     """Build a dataset from `path`, optionally pairing an augmented-input dataset
     from `aug_path` on top of it (augmented encoder input -> clean target)."""
     ds = cls(path, **extra)
     if aug_path:
-        ds = PairedInputDataset(ds, cls(aug_path, **extra))
+        aug_extra = {k: v for k, v in extra.items() if k not in _LATENT_DATASET_ARGS}
+        ds = PairedInputDataset(ds, cls(aug_path, **aug_extra))
     return ds
 
 
