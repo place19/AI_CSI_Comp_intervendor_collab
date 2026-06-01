@@ -22,6 +22,7 @@ Built around a config-driven, registry-based block system so new encoders/decode
   - **MLflow** (optional): windowed-mean train metrics, **epoch-indexed validation metrics**, per-run note with full config + per-block FLOPs/params/output shapes, resolved-config artifact. Checkpoints are NOT uploaded — they live only in `outputs/<run>/`.
 - **Devices**: `cpu`, `cuda` (selected via `CUDA_VISIBLE_DEVICES`), `mps` (Apple Silicon). For `test.py` / `infer.py`, `gpu_index` embedded in the checkpoint config cannot be applied before `torch.load()` — pass `--device cuda --gpu-index N` on the CLI to select a specific GPU with these scripts.
 - **Data formats**: raw int8 LMDB (`lmdb_raw`) and single-file `.npz` (`npz`). `D` (int8 CSI) is the only required array; `Z`/`Zq` (latent arrays) are optional and only needed for `decoder_only` mode or latent-space losses. Datasets emit a separate `real_target`/`imag_target` pair offset by `target_offset` (default `1/256`) to model the 3GPP/HW int8 floor-quantization bin midpoint.
+- **Augmented-input training** (`augmented CSI → target CSI`): set optional `data.aug_train_path` / `data.aug_val_path` to feed an augmented (UE-condition) dataset as the **encoder input** while the reconstruction target stays the clean CSI from `train_path` / `val_path`. Omit them for the default `target CSI → target CSI`. Index-aligned, same format + `dataset_args`; only meaningful when the encoder is trained. `test.py` / `infer.py` honour the embedded `aug_val_path` and expose `--aug-data-path` to override it.
 - **DataLoader knobs from YAML**: `num_workers`, `pin_memory`, `prefetch_factor`, `persistent_workers`, `drop_last` plus per-split `train_loader` / `val_loader` overrides.
 - **Mixed precision (AMP)**: `training.amp.{enabled, dtype}` wraps the forward in `torch.amp.autocast` for train + val. Two fp32 islands are baked in — loss computation and MHA softmax — to prevent backprop blow-ups seen under naive fp16. `GradScaler` is only constructed for cuda + fp16.
 - **`torch.compile`** (optional): `training.compile.{enabled, mode, fullgraph}` compiles encoder and decoder separately (quantizer stays uncompiled — STE backward is hostile to graph capture). Dynamic shapes are always disabled (`dynamic=False`) since DataLoader batches are fixed-size and CUDA Graph-based modes require static shapes. Checkpoints save the underlying `_orig_mod` state_dict so disk files load cleanly into compiled or uncompiled inference builds.
@@ -68,6 +69,13 @@ The framework reads two on-disk formats:
 
 Set `data.format` to `npz` or `lmdb_raw` and `data.train_path` / `data.val_path`
 accordingly.
+
+To train an `augmented CSI → target CSI` autoencoder (modelling the degraded CSI
+a UE actually sees), additionally set `data.aug_train_path` / `data.aug_val_path`
+to index-aligned datasets of the same format. Their samples become the **encoder
+input** while the reconstruction target stays the clean CSI from
+`train_path` / `val_path`. Omit them for the default `target CSI → target CSI`.
+See `configs/examples/joint_cnn_aug_input.yaml`.
 
 ### 2. (Optional) Start an MLflow server
 
@@ -136,6 +144,11 @@ python scripts/test.py --checkpoint outputs/<run>/best.pt
 python scripts/test.py --checkpoint outputs/<run>/best.pt \
   --data-path /path/to/test_data.npz
 
+# Evaluate with augmented encoder input (augmented CSI -> target CSI)
+python scripts/test.py --checkpoint outputs/<run>/best.pt \
+  --data-path /path/to/test_data.npz \
+  --aug-data-path /path/to/test_data_augmented.npz
+
 # Evaluate — cross-checkpoint: encoder and decoder from separate runs
 python scripts/test.py \
   --encoder-checkpoint outputs/<enc_run>/best.pt \
@@ -199,6 +212,10 @@ data:
   format: npz                        # 'npz' (single file) or 'lmdb_raw' (directory)
   train_path: /path/to/train_dataset.npz
   val_path: /path/to/valid_dataset.npz
+  # Optional augmented encoder input (augmented CSI -> target CSI). Same format +
+  # dataset_args, index-aligned with train/val. Omit for target CSI -> target CSI.
+  # aug_train_path: /path/to/train_dataset_augmented.npz
+  # aug_val_path: /path/to/valid_dataset_augmented.npz
   max_subband: 13
   max_port: 32
   layout: cnn                        # 'cnn' or 'transformer'
@@ -358,7 +375,7 @@ The same pattern (`@register("loss"|"quantizer"|"dataset"|"scheduler", "...")`) 
 ## Testing
 
 ```bash
-pytest                # full suite (353 tests)
+pytest                # full suite (361 tests)
 pytest tests/test_amp.py tests/test_compile.py tests/test_onnx_fuse.py -v
 pytest tests/test_latent_mask.py -v   # latent masking unit + integration tests
 ```
@@ -394,7 +411,7 @@ src/csi_comp/
 
 scripts/                 # train.py, test.py, export_onnx.py, infer.py
 configs/                 # examples/
-tests/                   # pytest suite (353 tests)
+tests/                   # pytest suite (361 tests)
 ```
 
 ---

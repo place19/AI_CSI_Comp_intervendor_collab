@@ -49,6 +49,10 @@ def _parse_args() -> argparse.Namespace:
     )
     ap.add_argument("--data-path", type=Path, default=None,
                     help="override the validation data path from the checkpoint config")
+    ap.add_argument("--aug-data-path", type=Path, default=None,
+                    help="override the augmented encoder-input path (data.aug_val_path); "
+                         "feeds augmented CSI as encoder input while the target stays "
+                         "the clean data-path CSI")
     ap.add_argument("--device", choices=("cpu", "cuda", "mps"), default=None)
     ap.add_argument("--gpu-index", type=int, default=None)
     args = ap.parse_args()
@@ -101,10 +105,15 @@ def main() -> int:
     )
     from csi_comp.training.checkpoint import load_checkpoint
 
-    # --data-path is a shortcut for --set data.val_path=...; applied before
-    # user --set overrides so explicit --set data.val_path=... wins.
+    # --data-path / --aug-data-path are shortcuts for --set data.val_path=... /
+    # data.aug_val_path=...; applied before user --set overrides so explicit
+    # --set ... wins.
+    prepend: list[str] = []
     if args.data_path is not None:
-        args.overrides = [f"data.val_path={args.data_path}"] + args.overrides
+        prepend.append(f"data.val_path={args.data_path}")
+    if args.aug_data_path is not None:
+        prepend.append(f"data.aug_val_path={args.aug_data_path}")
+    args.overrides = prepend + args.overrides
 
     if args.encoder_checkpoint and args.decoder_checkpoint:
         # --- cross-checkpoint mode ---

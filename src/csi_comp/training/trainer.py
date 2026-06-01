@@ -33,7 +33,9 @@ def _batch_to_io(
     imag = batch["imag"].to(device)
     mask = batch["mask"].to(device)
     # Reconstruction target may differ from encoder input by a bin-midpoint
-    # dequantization offset (3GPP/HW int8 floor convention). Fall back to the
+    # dequantization offset (3GPP/HW int8 floor convention) and/or because the
+    # encoder input is an augmented (UE-condition) dataset paired against the
+    # clean target (PairedInputDataset; see data/paired.py). Fall back to the
     # raw input when the dataset doesn't provide a separate target.
     if "real_target" in batch and "imag_target" in batch:
         real_t = batch["real_target"].to(device)

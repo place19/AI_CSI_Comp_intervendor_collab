@@ -10,6 +10,15 @@ YAML schema (all keys optional unless marked required):
       max_port: int                     # required (for collate)
       batch_size: int                   # required (used as default for both loaders)
 
+      # Optional augmented-input paths (same format + dataset_args as train/val).
+      # When set, the encoder input comes from this dataset while the
+      # reconstruction target stays the clean target CSI from train_path/val_path
+      # (i.e. "augmented CSI -> target CSI"). Omit for the default
+      # "target CSI -> target CSI" behaviour. Only meaningful when the encoder is
+      # trained; a no-op in decoder_only mode (encoder input is unused there).
+      aug_train_path: ...               # optional
+      aug_val_path: ...                 # optional
+
       # Optional defaults applied to both train and val loaders:
       num_workers: int                  # default 0
       pin_memory: bool                  # default False
@@ -32,7 +41,7 @@ from typing import Any
 
 from torch.utils.data import DataLoader
 
-from ..data import make_collate_fn
+from ..data import PairedInputDataset, make_collate_fn
 from ..registry import get as reg_get
 from ..utils import filter_kwargs
 
@@ -70,6 +79,15 @@ def _loader_kwargs(loader_cfg: dict[str, Any] | None, *, defaults: dict[str, Any
     return kw
 
 
+def _build_dataset(cls, extra: dict[str, Any], path: Any, aug_path: Any):
+    """Build a dataset from `path`, optionally pairing an augmented-input dataset
+    from `aug_path` on top of it (augmented encoder input -> clean target)."""
+    ds = cls(path, **extra)
+    if aug_path:
+        ds = PairedInputDataset(ds, cls(aug_path, **extra))
+    return ds
+
+
 def build_val_loader(data_cfg: dict[str, Any]) -> DataLoader:
     """Build only the val DataLoader — use in test/infer scripts where train data is not needed.
 
@@ -80,7 +98,7 @@ def build_val_loader(data_cfg: dict[str, Any]) -> DataLoader:
     fmt = data_cfg["format"]
     cls = reg_get("dataset", fmt)
     extra: dict[str, Any] = filter_kwargs(cls.__init__, dict(data_cfg.get("dataset_args", {}) or {}))
-    val_ds = cls(data_cfg["val_path"], **extra)
+    val_ds = _build_dataset(cls, extra, data_cfg["val_path"], data_cfg.get("aug_val_path"))
     coll = make_collate_fn(int(data_cfg["max_subband"]), int(data_cfg["max_port"]))
     # Exclude drop_last from common so training-convenience settings don't silently
     # drop the last partial batch during evaluation.
@@ -97,8 +115,8 @@ def build_dataloaders(data_cfg: dict[str, Any]) -> tuple[DataLoader, DataLoader]
     fmt = data_cfg["format"]
     cls = reg_get("dataset", fmt)
     extra: dict[str, Any] = filter_kwargs(cls.__init__, dict(data_cfg.get("dataset_args", {}) or {}))
-    train_ds = cls(data_cfg["train_path"], **extra)
-    val_ds = cls(data_cfg["val_path"], **extra)
+    train_ds = _build_dataset(cls, extra, data_cfg["train_path"], data_cfg.get("aug_train_path"))
+    val_ds = _build_dataset(cls, extra, data_cfg["val_path"], data_cfg.get("aug_val_path"))
     coll = make_collate_fn(int(data_cfg["max_subband"]), int(data_cfg["max_port"]))
 
     # Top-level fields act as defaults for both loaders.

@@ -99,6 +99,12 @@ def _parse_args() -> argparse.Namespace:
         help="dataset to run inference on; defaults to data.val_path from the config",
     )
     ap.add_argument(
+        "--aug-data-path", type=Path, default=None,
+        help="override the augmented encoder-input path (data.aug_val_path); "
+             "feeds augmented CSI as encoder input while the target stays the "
+             "clean data-path CSI",
+    )
+    ap.add_argument(
         "--out", type=Path, default=None,
         help="output directory; defaults to <ckpt parent>/infer_<timestamp>",
     )
@@ -139,9 +145,14 @@ def main() -> int:
     import torch
     from csi_comp.config import apply_overrides, resolve
 
-    # --data-path is a shortcut for --set data.val_path=...; applied before
-    # user --set overrides so explicit --set data.val_path=... wins.
-    data_override = [f"data.val_path={args.data_path}"] if args.data_path is not None else []
+    # --data-path / --aug-data-path are shortcuts for --set data.val_path=... /
+    # data.aug_val_path=...; applied before user --set overrides so explicit
+    # --set ... wins.
+    data_override: list[str] = []
+    if args.data_path is not None:
+        data_override.append(f"data.val_path={args.data_path}")
+    if args.aug_data_path is not None:
+        data_override.append(f"data.aug_val_path={args.aug_data_path}")
     overrides = data_override + args.overrides
 
     if args.encoder_checkpoint and args.decoder_checkpoint:
