@@ -5,6 +5,7 @@ import torch
 
 from csi_comp.losses import (
     MSELatent,
+    MSERescaledLatent,
     OneMinusSGCS,
     WeightedSumLoss,
     sgcs_per_subband,
@@ -89,6 +90,16 @@ def test_mse_latent():
     loss = MSELatent()
     assert loss({"latent": pred}, {"latent_target": tgt}).item() == pytest.approx(0.0)
     assert loss({"latent": torch.zeros(4, 16)}, {"latent_target": torch.ones(4, 16)}).item() == pytest.approx(1.0)
+
+
+def test_mse_rescaled_latent():
+    pred = torch.randn(4, 16)
+    tgt = pred.clone()
+    loss = MSERescaledLatent()
+    assert loss({"rescaled_latent": pred}, {"latent_target": tgt}).item() == pytest.approx(0.0)
+    assert loss(
+        {"rescaled_latent": torch.zeros(4, 16)}, {"latent_target": torch.ones(4, 16)}
+    ).item() == pytest.approx(1.0)
 
 
 def test_weighted_sum_loss_combines():

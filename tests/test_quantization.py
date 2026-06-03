@@ -176,6 +176,32 @@ def test_encoder_value_range_none_by_default():
     assert q._alpha is None
 
 
+def test_rescale_to_value_range_applies_affine():
+    # encoder_value_range=(-1,1), value_range=(-2,2): alpha=2, beta=0 → x' = 2*x.
+    q = Quantizer(bits=2, value_range=(-2.0, 2.0),
+                  encoder_value_range=(-1.0, 1.0), grad="ste")
+    x = torch.tensor([-1.0, -0.25, 0.5, 1.0])
+    assert torch.allclose(q.rescale_to_value_range(x), 2.0 * x)
+
+
+def test_rescale_to_value_range_identity_when_unset():
+    # No encoder_value_range → transform is the identity.
+    q = Quantizer(bits=2, value_range=(-1.0, 1.0), grad="ste")
+    x = torch.tensor([-0.9, 0.1, 0.8])
+    assert torch.allclose(q.rescale_to_value_range(x), x)
+
+
+def test_rescale_matches_forward_presnap():
+    # In eval, forward() = snap_to_nearest(rescale_to_value_range(x)). Verify the
+    # accessor reproduces exactly the affine forward() applies before snapping.
+    q = Quantizer(bits=2, value_range=(-1.0, 1.0),
+                  encoder_value_range=(0.0, 1.0), grad="hard")
+    q.eval()
+    x = torch.tensor([0.0, 0.5, 0.875, 1.0])
+    rescaled = q.rescale_to_value_range(x)
+    assert torch.allclose(q(x), snap_to_nearest(rescaled, q.levels))
+
+
 def test_encoder_value_range_invalid():
     with pytest.raises(ValueError):
         Quantizer(bits=2, value_range=(-1.0, 1.0),

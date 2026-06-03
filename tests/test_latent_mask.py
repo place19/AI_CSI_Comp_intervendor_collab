@@ -375,6 +375,17 @@ def test_batch_to_io_dual_recon_full_differs_from_half():
         "full and half recons should differ unless latent second half is all-zero by coincidence"
 
 
+def test_batch_to_io_exposes_rescaled_latent():
+    """pred_pack always carries the rescaled (pre-quant, value_range) latent."""
+    from csi_comp.training.trainer import _batch_to_io
+    from csi_comp.training.modes import get_mode_spec as _gms
+    ae = _build_ae()
+    batch = _make_fake_batch()
+    pred, _ = _batch_to_io(ae, batch, _gms("joint"), torch.device("cpu"), mask_spec=None)
+    assert "rescaled_latent" in pred
+    assert pred["rescaled_latent"].shape == pred["latent"].shape
+
+
 # ===========================================================================
 # Trainer integration — each masking mode completes one epoch without error
 # ===========================================================================

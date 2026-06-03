@@ -22,6 +22,25 @@ class MSELatent(nn.Module):
         return F.mse_loss(pred, target)
 
 
+@register("loss", "mse_rescaled_latent")
+class MSERescaledLatent(nn.Module):
+    """MSE between the rescaled latent and a known target latent.
+
+    The rescaled latent is the encoder output mapped into the quantizer's
+    `value_range` (the pre-quantization affine `alpha*x + beta`), i.e. the value
+    fed to the quantizer *before* snapping. Sits between `mse_latent` (raw encoder
+    output) and `mse_quantized_latent` (post-quantization). Identity transform
+    (== `mse_latent`) when the quantizer has no `encoder_value_range`.
+    """
+
+    name = "mse_rescaled_latent"
+
+    def forward(self, pred_pack: dict[str, Any], target_pack: dict[str, Any]) -> torch.Tensor:
+        pred = pred_pack["rescaled_latent"]
+        target = target_pack["latent_target"]
+        return F.mse_loss(pred, target)
+
+
 @register("loss", "mse_quantized_latent")
 class MSEQuantizedLatent(nn.Module):
     """MSE against the quantized latent — relevant when matching post-quantization codes."""

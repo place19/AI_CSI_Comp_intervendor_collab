@@ -111,9 +111,20 @@ class Quantizer(nn.Module):
         self.grad_name = grad_name
         self.grad = reg_get("grad", grad_name)(**grad_cfg)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def rescale_to_value_range(self, x: torch.Tensor) -> torch.Tensor:
+        """Map the encoder output into `value_range` (the pre-quantization affine).
+
+        Identity when `encoder_value_range` is unset (`_alpha is None`). Shared by
+        `forward` and by callers (e.g. the trainer) that want the rescaled-but-not-
+        yet-quantized latent for a latent-space loss, so the affine has one source
+        of truth.
+        """
         if self._alpha is not None:
-            x = self._alpha * x + self._beta
+            return self._alpha * x + self._beta
+        return x
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.rescale_to_value_range(x)
         if self.training:
             return self.grad(x, self.levels)
         # Eval / inference: hard-snap regardless of grad strategy (see class docstring).

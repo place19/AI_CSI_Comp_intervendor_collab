@@ -52,15 +52,22 @@ def _batch_to_io(
             # Clone before decoder: encoder/decoder CUDA Graph pools may overlap.
             if use_cuda_graphs:
                 latent = latent.clone()
-            q_latent = ae.quantizer(latent) if ae.quantizer is not None else latent
+            if ae.quantizer is not None:
+                rescaled = ae.quantizer.rescale_to_value_range(latent)
+                q_latent = ae.quantizer(latent)
+            else:
+                rescaled = latent
+                q_latent = latent
             if mask_spec.mode == "half":
                 masked = apply_latent_mask(q_latent, mask_spec.mask_ratio)
                 recon = ae.decoder(masked) if ae.decoder is not None else None
-                out = {"latent": latent, "quantized_latent": q_latent, "recon": recon}
+                out = {"latent": latent, "rescaled_latent": rescaled,
+                       "quantized_latent": q_latent, "recon": recon}
             elif mask_spec.mode == "random":
                 masked = apply_random_latent_mask(q_latent, mask_spec.mask_ratio)
                 recon = ae.decoder(masked) if ae.decoder is not None else None
-                out = {"latent": latent, "quantized_latent": q_latent, "recon": recon}
+                out = {"latent": latent, "rescaled_latent": rescaled,
+                       "quantized_latent": q_latent, "recon": recon}
             elif mask_spec.mode == "dual":
                 recon_full = ae.decoder(q_latent) if ae.decoder is not None else None
                 # Clone before second decoder run overwrites the first output buffer.
@@ -70,6 +77,7 @@ def _batch_to_io(
                 recon_half = ae.decoder(masked) if ae.decoder is not None else None
                 out = {
                     "latent": latent,
+                    "rescaled_latent": rescaled,
                     "quantized_latent": q_latent,
                     "recon": recon_full,
                     "recon_half": recon_half,

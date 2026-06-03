@@ -41,6 +41,16 @@ class Autoencoder(nn.Module):
         # Clone before decoder: encoder/decoder CUDA Graph pools may overlap.
         if self.decoder is not None:
             latent = latent.clone()
-        q_latent = self.quantizer(latent) if self.quantizer is not None else latent
+        if self.quantizer is not None:
+            rescaled = self.quantizer.rescale_to_value_range(latent)
+            q_latent = self.quantizer(latent)
+        else:
+            rescaled = latent
+            q_latent = latent
         recon = self.decoder(q_latent) if self.decoder is not None else None
-        return {"latent": latent, "quantized_latent": q_latent, "recon": recon}
+        return {
+            "latent": latent,
+            "rescaled_latent": rescaled,
+            "quantized_latent": q_latent,
+            "recon": recon,
+        }
