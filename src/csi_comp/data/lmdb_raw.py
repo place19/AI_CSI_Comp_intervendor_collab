@@ -37,14 +37,21 @@ class LmdbRawDataset(Dataset):
         scale:               multiplicative scale applied after int8 → float32 cast.
         key_prefix:          default "D" — keys look like "D000000".
         dtype:               on-disk integer dtype ("i1" for int8, "i2" for int16, etc.).
-        with_latent:         if True, also load a paired latent target.
-        latent_key_prefix:   default "Zq" — keys look like "Zq000000".
-        latent_dtype:        on-disk float dtype for the latent ("f4" = float32).
+        expose_z:            if True, also load the pre-quant teacher latent from
+                             `{z_key_prefix}{idx:06d}` into `latent_target_z`.
+        expose_zq:           if True, also load the post-quant teacher latent from
+                             `{zq_key_prefix}{idx:06d}` into `latent_target_zq`.
+        z_key_prefix:        default "Z" — keys look like "Z000000".
+        zq_key_prefix:       default "Zq" — keys look like "Zq000000".
+        latent_dtype:        on-disk float dtype for the latents ("f4" = float32).
 
-    When `with_latent=True` the lmdb is expected to hold paired latent keys
-    (e.g. b"Zq000000" alongside b"D000000"). `len(self)` counts only keys that
-    match the exact pattern `{key_prefix}{idx:06d}` so auxiliary key families
-    and D-prefixed metadata keys do not inflate the count.
+    The CDL lmdb holds D, Z, and Zq key families per sample. `expose_z`/`expose_zq`
+    surface them as `latent_target_z` / `latent_target_zq` (symmetric with npz), so
+    a single run can supervise different encoder stages against Z and Zq (each loss
+    term picks its target via `target_key`); decoder_only consumes whichever is
+    exposed (typically Zq). A key requested via `expose_*` but absent raises.
+    `len(self)` counts only keys matching `{key_prefix}{idx:06d}`, so the auxiliary
+    Z/Zq families and D-prefixed metadata keys never inflate the count.
     """
 
     def __init__(
@@ -56,8 +63,10 @@ class LmdbRawDataset(Dataset):
         target_offset: float = _DEFAULT_TARGET_OFFSET,
         key_prefix: str = "D",
         dtype: str = "i1",
-        with_latent: bool = False,
-        latent_key_prefix: str = "Zq",
+        expose_z: bool = False,
+        expose_zq: bool = False,
+        z_key_prefix: str = "Z",
+        zq_key_prefix: str = "Zq",
         latent_dtype: str = "f4",
     ):
         self.root = str(Path(root))
@@ -67,8 +76,13 @@ class LmdbRawDataset(Dataset):
         self.target_offset = float(target_offset)
         self.key_prefix = key_prefix
         self.np_dtype = _np_dtype(dtype)
-        self.with_latent = bool(with_latent)
-        self.latent_key_prefix = latent_key_prefix
+        # (out_key, on-disk prefix) for each enabled teacher latent.
+        self._latent_specs = [
+            spec for flag, spec in (
+                (expose_z, ("latent_target_z", z_key_prefix)),
+                (expose_zq, ("latent_target_zq", zq_key_prefix)),
+            ) if flag
+        ]
         self.latent_np_dtype = _np_dtype(latent_dtype)
         self._env = None
         self._txn = None
@@ -127,12 +141,6 @@ class LmdbRawDataset(Dataset):
         key = f"{self.key_prefix}{i:06d}".encode("ascii")
         txn = self._ensure_txn()
         raw = txn.get(key)
-        latent_raw = None
-        if self.with_latent:
-            lkey = f"{self.latent_key_prefix}{i:06d}".encode("ascii")
-            latent_raw = txn.get(lkey)
-            if latent_raw is None:
-                raise KeyError(f"missing latent key {lkey!r} in lmdb at {self.root}")
         if raw is None:
             raise KeyError(f"missing key {key!r} in lmdb at {self.root}")
         a = np.frombuffer(raw, dtype=self.np_dtype).reshape(self.S, self.P, 2)
@@ -146,12 +154,16 @@ class LmdbRawDataset(Dataset):
             "imag_target": tgt[..., 1],
             "true_shape": (self.S, self.P),
         }
-        if latent_raw is not None:
+        for out_key, prefix in self._latent_specs:
+            lkey = f"{prefix}{i:06d}".encode("ascii")
+            latent_raw = txn.get(lkey)
+            if latent_raw is None:
+                raise KeyError(f"missing latent key {lkey!r} in lmdb at {self.root}")
             # Stored 1D float32 (or whatever latent_dtype was set to). Cast to float32
             # so downstream code is dtype-uniform regardless of on-disk format.
             lat = np.frombuffer(latent_raw, dtype=self.latent_np_dtype).astype(np.float32, copy=False)
             # .copy() because torch.from_numpy on a read-only buffer view warns.
-            sample["latent_target"] = torch.from_numpy(lat.copy())
+            sample[out_key] = torch.from_numpy(lat.copy())
         return sample
 
     def __getstate__(self):

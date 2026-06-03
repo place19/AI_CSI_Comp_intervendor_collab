@@ -38,13 +38,19 @@ class NpzDataset(Dataset):
                         sees what HW actually produces.
         latent_key:     which array becomes `latent_target` in each sample. One of
                         None (default, do not emit `latent_target`), "Zq"
-                        (post-quant), or "Z" (pre-quant). Set to "Zq" or "Z"
-                        only when `latent_target` is actually consumed (e.g.
-                        `decoder_only` mode or `mse_latent` loss).
-        also_expose_z:  if True and `Z` is present, every sample also carries
-                        `latent_target_z` (float32) — for losses that want the
-                        un-quantized teacher latent alongside whatever
-                        `latent_key` selected.
+                        (post-quant), or "Z" (pre-quant). This is the "primary
+                        latent" slot — it doubles as the decoder input in
+                        `decoder_only` mode. Set it only when `latent_target` is
+                        actually consumed.
+        expose_z:       if True and `Z` is present, every sample also carries
+                        `latent_target_z` (float32) — the pre-quant teacher latent.
+        expose_zq:      if True and `Zq` is present, every sample also carries
+                        `latent_target_zq` (float32) — the post-quant teacher
+                        latent. Together with `expose_z` this lets a single run
+                        supervise different stages against Z and Zq independently
+                        (each loss term selects its target via `target_key`).
+                        Exposure is opportunistic: a missing array is silently
+                        skipped here; a loss that asks for an absent target raises.
     """
 
     def __init__(
@@ -53,7 +59,8 @@ class NpzDataset(Dataset):
         scale: float = _DEFAULT_SCALE,
         target_offset: float = _DEFAULT_TARGET_OFFSET,
         latent_key: Optional[str] = None,
-        also_expose_z: bool = True,
+        expose_z: bool = True,
+        expose_zq: bool = False,
     ):
         self.path = Path(path)
         with np.load(self.path) as f:
@@ -92,7 +99,11 @@ class NpzDataset(Dataset):
         )
         self.latent_z = (
             torch.from_numpy(np.ascontiguousarray(Z).astype(np.float32, copy=False))
-            if (also_expose_z and Z is not None) else None
+            if (expose_z and Z is not None) else None
+        )
+        self.latent_zq = (
+            torch.from_numpy(np.ascontiguousarray(Zq).astype(np.float32, copy=False))
+            if (expose_zq and Zq is not None) else None
         )
 
     def __len__(self) -> int:
@@ -112,4 +123,6 @@ class NpzDataset(Dataset):
             out["latent_target"] = self.latent_target[i]
         if self.latent_z is not None:
             out["latent_target_z"] = self.latent_z[i]
+        if self.latent_zq is not None:
+            out["latent_target_zq"] = self.latent_zq[i]
         return out

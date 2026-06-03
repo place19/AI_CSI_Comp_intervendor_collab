@@ -386,6 +386,19 @@ def test_batch_to_io_exposes_rescaled_latent():
     assert pred["rescaled_latent"].shape == pred["latent"].shape
 
 
+def test_batch_to_io_forwards_latent_targets():
+    """latent_target / _z / _zq in the batch all reach target_pack."""
+    from csi_comp.training.trainer import _batch_to_io
+    from csi_comp.training.modes import get_mode_spec as _gms
+    ae = _build_ae()
+    batch = _make_fake_batch()
+    batch["latent_target_z"] = torch.randn(2, 4)
+    batch["latent_target_zq"] = torch.randn(2, 4)
+    _, target = _batch_to_io(ae, batch, _gms("joint"), torch.device("cpu"), mask_spec=None)
+    assert "latent_target_z" in target
+    assert "latent_target_zq" in target
+
+
 # ===========================================================================
 # Trainer integration — each masking mode completes one epoch without error
 # ===========================================================================

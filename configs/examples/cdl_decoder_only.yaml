@@ -4,8 +4,8 @@
 #   D000000  — int8 precoder bytes,  (S, P, 2)   → divided by 128 to get float32
 #   Zq000000 — float32 latent bytes, (latent_dim,)
 #
-# No encoder / no quantizer is built; the decoder ingests the pre-quantised
-# latent supplied by the dataset and is trained to reconstruct the precoder.
+# No encoder / no quantizer is built; the decoder ingests the Zq latent supplied
+# by the dataset (latent_target_zq) and is trained to reconstruct the precoder.
 experiment:
   name: cdl_decoder_only
   seed: 42
@@ -35,9 +35,9 @@ data:
   dataset_args:
     subband: 13
     port: 32
-    with_latent: true          # tells lmdb_raw to also load Zq{idx:06d}
-    latent_key_prefix: Zq
-    latent_dtype: f4
+    expose_zq: true            # load Zq{idx:06d} -> latent_target_zq (decoder input)
+    # zq_key_prefix: Zq        # default; on-disk key family for Zq
+    # latent_dtype: f4         # default; on-disk float dtype for the latent
 
 model:
   encoder: { blocks: [] }

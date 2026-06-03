@@ -1,9 +1,9 @@
 # Encoder-only training on real CDL data.
 #
-# The dataset supplies paired (D, Zq) keys via lmdb_raw(with_latent=true);
-# encoder + quantizer are trained so that the quantized latent matches the
-# given Zq target — i.e. the encoder learns to reproduce another vendor's
-# compressed code from the precoder. No decoder is built in this mode.
+# The dataset supplies paired (D, Zq) keys via lmdb_raw(expose_zq=true), which
+# surfaces Zq as `latent_target_zq`; encoder + quantizer are trained so that the
+# quantized latent matches the given Zq target — i.e. the encoder learns to
+# reproduce another vendor's compressed code from the precoder. No decoder here.
 experiment:
   name: cdl_encoder_only
   seed: 42
@@ -32,9 +32,9 @@ data:
   dataset_args:
     subband: 13
     port: 32
-    with_latent: true
-    latent_key_prefix: Zq
-    latent_dtype: f4
+    expose_zq: true            # load Zq{idx:06d} -> latent_target_zq
+    # zq_key_prefix: Zq        # default; on-disk key family for Zq
+    # latent_dtype: f4         # default; on-disk float dtype for the latent
 
 model:
   encoder:
@@ -90,5 +90,5 @@ training:
 
 loss:
   terms:
-    # Encoder's quantized latent vs the supplied Zq target.
-    - { name: mse_quantized_latent, weight: 1.0 }
+    # Encoder's quantized latent vs the supplied Zq target (latent_target_zq).
+    - { name: mse_quantized_latent, weight: 1.0, params: { target_key: latent_target_zq } }

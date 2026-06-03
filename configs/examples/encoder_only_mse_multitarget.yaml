@@ -1,0 +1,68 @@
+experiment:
+  name: encoder_only_mse_multitarget
+  seed: 42
+  device: cpu
+  mlflow:
+    tracking_uri: http://127.0.0.1:5000
+    experiment_name: csi_compression
+    log_every_n_iters: 10
+
+data:
+  # Multi-target distillation: supervise different encoder stages against
+  # different teacher latents in one run. The npz must carry both Z (pre-quant)
+  # and Zq (post-quant). expose_z / expose_zq surface them as latent_target_z /
+  # latent_target_zq; each loss term selects its target via params.target_key.
+  format: npz
+  train_path: /path/to/train_dataset.npz
+  val_path: /path/to/valid_dataset.npz
+  max_subband: 13
+  max_port: 32
+  layout: cnn
+  batch_size: 16
+  num_workers: 0
+  dataset_args:
+    # latent_key stays unset here — it is the decoder-input / "primary latent"
+    # slot (used in decoder_only), not needed for loss targets.
+    expose_z: true       # -> latent_target_z  = Z   (pre-quant teacher)
+    expose_zq: true      # -> latent_target_zq = Zq  (post-quant teacher)
+
+model:
+  encoder:
+    blocks:
+      - { name: cnn_block, channels: 16, kernel: 3 }
+      - { name: linear_proj, out_dim: 16, activation: relu }
+      - { name: activation, activation: tanh }   # student encoder: tanh output → [-1, 1]
+  decoder:
+    blocks: []  # unused in encoder_only
+
+quantizer:
+  type: uniform
+  bits: 2
+  value_range: [-1.0, 1.0]
+  unit_spaced: true
+  grad: ste
+  # Student encoder ends in tanh ([-1,1]); the teacher data was produced by a
+  # sigmoid encoder. encoder_value_range maps the encoder output into value_range
+  # before quantization, so mse_rescaled_latent compares in the common range.
+  encoder_value_range: [-1.0, 1.0]
+
+training:
+  mode: encoder_only
+  epochs: 3
+  optimizer: { name: adam, lr: 1.0e-3 }
+  val_every_n_epochs: 1
+  best_metric: { name: loss/total, mode: min }
+  amp:
+    enabled: false
+  compile:
+    enabled: false
+
+loss:
+  # Each term picks its teacher via target_key:
+  #   mse_latent           (raw encoder output)        ↔ Z   (latent_target_z)
+  #   mse_rescaled_latent  (rescaled into value_range) ↔ Z   (latent_target_z)
+  #   mse_quantized_latent (post-quant codes)          ↔ Zq  (latent_target_zq)
+  terms:
+    - { name: mse_latent,           weight: 1.0, params: { target_key: latent_target_z } }
+    - { name: mse_rescaled_latent,  weight: 1.0, params: { target_key: latent_target_z } }
+    - { name: mse_quantized_latent, weight: 1.0, params: { target_key: latent_target_zq } }

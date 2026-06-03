@@ -87,16 +87,31 @@ def _batch_to_io(
         else:
             out = ae(real, imag)
     elif mode_spec.needs_decoder:
-        # decoder_only: provided latent goes through decoder directly
-        latent = batch["latent_target"].to(device)
+        # decoder_only: provided latent goes through decoder directly. The decoder
+        # consumes the post-quant latent (Zq) at deployment; accept the legacy
+        # `latent_target` (npz latent_key) or an exposed `latent_target_zq` / `_z`.
+        dec_in_key = next(
+            (k for k in ("latent_target", "latent_target_zq", "latent_target_z") if k in batch),
+            None,
+        )
+        if dec_in_key is None:
+            raise KeyError(
+                "decoder_only mode needs a latent input: set data.dataset_args.expose_zq "
+                "(lmdb/npz) or latent_key (npz) so the batch carries a latent target."
+            )
+        latent = batch[dec_in_key].to(device)
         recon = ae.decoder(latent) if ae.decoder is not None else None
         out = {"latent": latent, "quantized_latent": latent, "recon": recon}
 
     # mask never flows through the model anymore; it's only consumed by the
     # loss (and only by terms that need it, like one_minus_sgcs).
     target: Dict[str, Any] = {"precoder": precoder, "mask": mask}
-    if "latent_target" in batch:
-        target["latent_target"] = batch["latent_target"].to(device)
+    # Forward every latent target the dataset emitted; loss terms pick one via
+    # `target_key` (e.g. mse_latent ↔ latent_target_z, mse_quantized_latent ↔
+    # latent_target_zq). `latent_target` also doubles as the decoder_only input above.
+    for k in ("latent_target", "latent_target_z", "latent_target_zq"):
+        if k in batch:
+            target[k] = batch[k].to(device)
     return out, target
 
 

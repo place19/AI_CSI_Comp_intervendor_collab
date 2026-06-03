@@ -5,6 +5,7 @@ import torch
 
 from csi_comp.losses import (
     MSELatent,
+    MSEQuantizedLatent,
     MSERescaledLatent,
     OneMinusSGCS,
     WeightedSumLoss,
@@ -100,6 +101,35 @@ def test_mse_rescaled_latent():
     assert loss(
         {"rescaled_latent": torch.zeros(4, 16)}, {"latent_target": torch.ones(4, 16)}
     ).item() == pytest.approx(1.0)
+
+
+def test_mse_latent_target_key_selects_teacher():
+    """target_key routes each loss to a distinct teacher in the same batch."""
+    z = torch.zeros(4, 16)
+    zq = torch.ones(4, 16)
+    target_pack = {"latent_target_z": z, "latent_target_zq": zq}
+    # mse_latent ↔ Z (latent_target_z): pred==z → 0
+    loss_z = MSELatent(target_key="latent_target_z")
+    assert loss_z({"latent": z.clone()}, target_pack).item() == pytest.approx(0.0)
+    # mse_quantized_latent ↔ Zq (latent_target_zq): pred==zq → 0
+    loss_zq = MSEQuantizedLatent(target_key="latent_target_zq")
+    assert loss_zq({"quantized_latent": zq.clone()}, target_pack).item() == pytest.approx(0.0)
+    # mse_rescaled_latent ↔ Z: pred==zq vs z → mean((1-0)^2) = 1
+    loss_r = MSERescaledLatent(target_key="latent_target_z")
+    assert loss_r({"rescaled_latent": zq.clone()}, target_pack).item() == pytest.approx(1.0)
+
+
+def test_mse_latent_default_target_key_is_latent_target():
+    loss = MSELatent()
+    assert loss.target_key == "latent_target"
+    pred = torch.randn(4, 16)
+    assert loss({"latent": pred}, {"latent_target": pred.clone()}).item() == pytest.approx(0.0)
+
+
+def test_mse_latent_missing_target_key_raises():
+    loss = MSELatent(target_key="latent_target_zq")
+    with pytest.raises(KeyError, match="latent_target_zq"):
+        loss({"latent": torch.zeros(4, 16)}, {"latent_target_z": torch.zeros(4, 16)})
 
 
 def test_weighted_sum_loss_combines():

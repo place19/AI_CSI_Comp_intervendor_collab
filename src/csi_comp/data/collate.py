@@ -21,8 +21,9 @@ def pad_and_collate(
         imag_target:    (B, max_subband, max_port) float32
         mask:           (B, max_subband, max_port) bool, True on valid cells
         true_shapes:    list[(s, p)]
-        latent_target:   (B, ...) — only if every sample carries one
-        latent_target_z: (B, ...) — only if every sample carries one
+        latent_target:    (B, ...) — only if every sample carries one
+        latent_target_z:  (B, ...) — only if every sample carries one (pre-quant teacher Z)
+        latent_target_zq: (B, ...) — only if every sample carries one (post-quant teacher Zq)
     """
     B = len(batch)
     if B == 0:
@@ -34,8 +35,10 @@ def pad_and_collate(
     mask = torch.zeros(B, max_subband, max_port, dtype=torch.bool)
     true_shapes = []
     n_target = 0
-    latents: list[torch.Tensor] = []
-    latents_z: list[torch.Tensor] = []
+    # Any latent target the dataset chose to emit (all-or-none per key). Kept generic
+    # so new teacher latents (e.g. latent_target_zq) need no extra plumbing here.
+    latent_keys = ("latent_target", "latent_target_z", "latent_target_zq")
+    latents: dict[str, list[torch.Tensor]] = {k: [] for k in latent_keys}
 
     for i, s in enumerate(batch):
         S, P = s["real"].shape
@@ -55,10 +58,9 @@ def pad_and_collate(
             real_tgt[i, :S, :P] = s["real_target"]
             imag_tgt[i, :S, :P] = s["imag_target"]
             n_target += 1
-        if "latent_target" in s:
-            latents.append(s["latent_target"])
-        if "latent_target_z" in s:
-            latents_z.append(s["latent_target_z"])
+        for k in latent_keys:
+            if k in s:
+                latents[k].append(s[k])
 
     out: dict[str, Any] = {
         "real": real,
@@ -71,14 +73,12 @@ def pad_and_collate(
             raise ValueError("real_target/imag_target must be present for all samples or none")
         out["real_target"] = real_tgt
         out["imag_target"] = imag_tgt
-    if latents:
-        if len(latents) != B:
-            raise ValueError("latent_target must be present for all samples or none")
-        out["latent_target"] = torch.stack(latents)
-    if latents_z:
-        if len(latents_z) != B:
-            raise ValueError("latent_target_z must be present for all samples or none")
-        out["latent_target_z"] = torch.stack(latents_z)
+    for k in latent_keys:
+        vals = latents[k]
+        if vals:
+            if len(vals) != B:
+                raise ValueError(f"{k} must be present for all samples or none")
+            out[k] = torch.stack(vals)
     return out
 
 

@@ -61,10 +61,31 @@ def test_npz_dataset_latent_key_z(npz_root):
 
 
 def test_npz_dataset_latent_key_none(npz_root):
-    ds = NpzDataset(npz_root / "train.npz", latent_key=None, also_expose_z=False)
+    ds = NpzDataset(npz_root / "train.npz", latent_key=None, expose_z=False)
     sample = ds[0]
     assert "latent_target" not in sample
     assert "latent_target_z" not in sample
+    assert "latent_target_zq" not in sample
+
+
+def test_npz_dataset_expose_zq(npz_root):
+    """expose_zq surfaces Zq as latent_target_zq, independent of latent_key."""
+    ds = NpzDataset(npz_root / "train.npz", latent_key=None,
+                    expose_z=False, expose_zq=True)
+    sample = ds[0]
+    assert "latent_target" not in sample
+    assert "latent_target_z" not in sample
+    assert sample["latent_target_zq"].shape == (16,)
+
+
+def test_npz_dataset_expose_both_z_and_zq(npz_root):
+    """Z and Zq are exposed under distinct keys (different arrays)."""
+    ds = NpzDataset(npz_root / "train.npz", latent_key=None,
+                    expose_z=True, expose_zq=True)
+    sample = ds[0]
+    assert sample["latent_target_z"].shape == (16,)
+    assert sample["latent_target_zq"].shape == (16,)
+    assert not torch.equal(sample["latent_target_z"], sample["latent_target_zq"])
 
 
 def test_npz_dataset_bad_latent_key(npz_root):
@@ -118,6 +139,26 @@ def test_collate_latent_z_stacked():
     assert out["latent_target_z"].shape == (2, 5)
     assert torch.equal(out["latent_target_z"][0], torch.full((5,), 10.0))
     assert torch.equal(out["latent_target_z"][1], torch.full((5,), 11.0))
+
+
+def test_collate_latent_zq_stacked():
+    """latent_target_zq stacks like the other latent targets."""
+    s = lambda i: {
+        "real": torch.zeros(3, 4), "imag": torch.zeros(3, 4), "true_shape": (3, 4),
+        "latent_target_zq": torch.full((5,), float(20 + i)),
+    }
+    out = pad_and_collate([s(0), s(1)], max_subband=8, max_port=8)
+    assert out["latent_target_zq"].shape == (2, 5)
+    assert torch.equal(out["latent_target_zq"][1], torch.full((5,), 21.0))
+    assert "latent_target" not in out
+
+
+def test_collate_latent_zq_all_or_none():
+    a = {"real": torch.zeros(3, 4), "imag": torch.zeros(3, 4), "true_shape": (3, 4)}
+    b = {"real": torch.zeros(3, 4), "imag": torch.zeros(3, 4), "true_shape": (3, 4),
+         "latent_target_zq": torch.ones(5)}
+    with pytest.raises(ValueError):
+        pad_and_collate([a, b], max_subband=8, max_port=8)
 
 
 def test_collate_pads_real_imag_target():

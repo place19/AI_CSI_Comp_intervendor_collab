@@ -33,7 +33,7 @@ data:
   dataset_args:
     subband: 13
     port: 32
-    with_latent: false
+    # no latent target needed: encoder input only (frozen decoder supplies recon)
 
 model:
   encoder:

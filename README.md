@@ -12,7 +12,7 @@ Built around a config-driven, registry-based block system so new encoders/decode
 - **Registry-based blocks**: CNN, depthwise-separable conv, residual, average pooling, transformer (custom Q/K/V/O with selectable pre/post-LN), positional encoding (fixed sin/cos · learnable random · learnable sin/cos), reshape, linear projection, standalone activation, bounding head, reshape head, complex FFN head (per-branch real/imag projections). Add a new block with a single `@register("block", "name")` decorator.
 - **Fixed-shape forward contract**: every block declares `out_shape` in `__init__` and has a single `forward(x) -> x` signature; the encoder/decoder builder propagates shapes statically. Padding masks live only on the data batch and are consumed by the loss — not threaded through the model.
 - **Configurable quantizer**: uniform quantization with pluggable gradient strategies (STE / soft / hard). Bit-width, range, and level spacing all configurable. The chosen `grad` strategy is used only during training — in `eval()` the quantizer always hard-snaps to the nearest level, so validation / `test.py` / `infer.py` reflect the deployed (hard) quantizer (a `soft` quantizer would otherwise emit continuous values at eval and overstate SGCS).
-- **Composite loss**: weighted sum of named loss terms (`one_minus_sgcs`, `mse_latent`, `mse_quantized_latent`, `dual_one_minus_sgcs`, …). Add new terms via the loss registry.
+- **Composite loss**: weighted sum of named loss terms (`one_minus_sgcs`, `mse_latent`, `mse_rescaled_latent`, `mse_quantized_latent`, `dual_one_minus_sgcs`, …). The latent-space MSE terms pick their teacher (Z / Zq) per term via `params.target_key`. Add new terms via the loss registry.
 - **Latent masking** (`model.latent_mask`): zero out the trailing fraction of the quantized latent before the decoder to simulate partial-bandwidth scenarios. Four modes: `full` (disabled), `half` (fixed), `random` (per-sample augmentation), `dual` (decoder called twice; loss is a weighted sum of full- and half-latent reconstructions). Applies only when both encoder and decoder are present (`joint`, `encoder_only_frozen_decoder`); automatically skipped in `encoder_only` and `decoder_only` modes.
 - **Schedulers**: PyTorch built-ins (`cosine`, `step`, `none`) plus a custom `warmup_cosine` (linear warmup → cosine annealing, iteration-unit).
 - **Optimizer hygiene**: AdamW/Adam/SGD split params into decay and no-decay groups (LayerNorm + bias excluded by default, GPT-2/BERT convention).
@@ -22,7 +22,7 @@ Built around a config-driven, registry-based block system so new encoders/decode
   - **MLflow** (optional): windowed-mean train metrics, **epoch-indexed validation metrics**, per-run note with full config + per-block FLOPs/params/output shapes, resolved-config artifact. Checkpoints are NOT uploaded — they live only in `outputs/<run>/`.
 - **Devices**: `cpu`, `cuda` (selected via `CUDA_VISIBLE_DEVICES`), `mps` (Apple Silicon). For `test.py` / `infer.py`, `gpu_index` embedded in the checkpoint config cannot be applied before `torch.load()` — pass `--device cuda --gpu-index N` on the CLI to select a specific GPU with these scripts.
 - **Data formats**: raw int8 LMDB (`lmdb_raw`) and single-file `.npz` (`npz`). `D` (int8 CSI) is the only required array; `Z`/`Zq` (latent arrays) are optional and only needed for `decoder_only` mode or latent-space losses. Datasets emit a separate `real_target`/`imag_target` pair offset by `target_offset` (default `1/256`) to model the 3GPP/HW int8 floor-quantization bin midpoint.
-- **Augmented-input training** (`augmented CSI → target CSI`): set optional `data.aug_train_path` / `data.aug_val_path` to feed an augmented (UE-condition) dataset as the **encoder input** while the reconstruction target stays the clean CSI from `train_path` / `val_path`. Omit them for the default `target CSI → target CSI`. Index-aligned, same format + `dataset_args` (latent-related args like `latent_key` / `with_latent` are ignored for the augmented dataset — it only supplies the encoder input, so its file needs no latent arrays); only meaningful when the encoder is trained. `test.py` / `infer.py` honour the embedded `aug_val_path` and expose `--aug-data-path` to override it.
+- **Augmented-input training** (`augmented CSI → target CSI`): set optional `data.aug_train_path` / `data.aug_val_path` to feed an augmented (UE-condition) dataset as the **encoder input** while the reconstruction target stays the clean CSI from `train_path` / `val_path`. Omit them for the default `target CSI → target CSI`. Index-aligned, same format + `dataset_args` (latent-related args like `latent_key` / `expose_z` / `expose_zq` are stripped for the augmented dataset — it only supplies the encoder input, so its file needs no latent arrays); only meaningful when the encoder is trained. `test.py` / `infer.py` honour the embedded `aug_val_path` and expose `--aug-data-path` to override it.
 - **DataLoader knobs from YAML**: `num_workers`, `pin_memory`, `prefetch_factor`, `persistent_workers`, `drop_last` plus per-split `train_loader` / `val_loader` overrides.
 - **Mixed precision (AMP)**: `training.amp.{enabled, dtype}` wraps the forward in `torch.amp.autocast` for train + val. Two fp32 islands are baked in — loss computation and MHA softmax — to prevent backprop blow-ups seen under naive fp16. `GradScaler` is only constructed for cuda + fp16.
 - **`torch.compile`** (optional): `training.compile.{enabled, mode, fullgraph}` compiles encoder and decoder separately (quantizer stays uncompiled — STE backward is hostile to graph capture). Dynamic shapes are always disabled (`dynamic=False`) since DataLoader batches are fixed-size and CUDA Graph-based modes require static shapes. Checkpoints save the underlying `_orig_mod` state_dict so disk files load cleanly into compiled or uncompiled inference builds.
@@ -64,8 +64,8 @@ The framework reads two on-disk formats:
   are optional — needed only for `decoder_only` mode or latent-space losses.
   Loaded fully into RAM.
 - **`lmdb_raw`** — a directory-style LMDB with keys `D{i:06d}` (required);
-  `Z{i:06d}` / `Zq{i:06d}` are optional (enable with `with_latent: true`).
-  Use this when the dataset is too large to keep resident.
+  `Z{i:06d}` / `Zq{i:06d}` are optional (enable with `expose_z: true` /
+  `expose_zq: true`). Use this when the dataset is too large to keep resident.
 
 Set `data.format` to `npz` or `lmdb_raw` and `data.train_path` / `data.val_path`
 accordingly.
@@ -235,8 +235,11 @@ data:
   # train_loader: { shuffle: true,  drop_last: false }   # per-split overrides
   # val_loader:   { shuffle: false, drop_last: false }
   dataset_args:
-    # latent_key: null                # null (default) | 'Zq' | 'Z' — set only for
-    #                                  decoder_only mode or latent-space losses
+    # latent_key: null                # null (default) | 'Zq' | 'Z' — primary latent
+    #                                  slot (decoder_only input); set for decoder_only.
+    # expose_z: true                  # expose Z  as latent_target_z  (npz + lmdb_raw)
+    # expose_zq: false                # expose Zq as latent_target_zq (npz + lmdb_raw)
+    #                                  → loss terms pick a teacher via params.target_key
     # target_offset: 0.00390625      # = 1/256 (default). 3GPP/HW bin-midpoint offset
     #                                  applied to reconstruction target only. 0.0 to disable.
 
