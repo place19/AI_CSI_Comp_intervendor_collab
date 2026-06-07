@@ -79,8 +79,8 @@ def _resolve_grad_cfg(grad: Union[str, Mapping[str, Any]]) -> Tuple[str, str, fl
     return fwd, bwd, temperature
 
 
-def snap_to_nearest(x: torch.Tensor, levels: torch.Tensor) -> torch.Tensor:
-    """Map each element of x to the closest entry of `levels`.
+def snap_to_index(x: torch.Tensor, levels: torch.Tensor) -> torch.Tensor:
+    """Index of the nearest entry of `levels` for each element of x.
 
     Assumes **uniformly-spaced ascending** levels (as produced by `build_uniform`
     — the only supported case). Computes the nearest index by rounding instead of
@@ -89,16 +89,23 @@ def snap_to_nearest(x: torch.Tensor, levels: torch.Tensor) -> torch.Tensor:
     O(numel(x) * 2**bits)). Uses `ceil(z - 0.5)` rather than `round` so exact ties
     resolve to the lower level — matching the previous ``argmin`` (first-minimum)
     behaviour — and so it stays ONNX-exportable (`searchsorted` is not, and
-    `round` is banker's-rounding which would break ties differently). Output keeps
-    `levels`' dtype.
+    `round` is banker's-rounding which would break ties differently). Returns a
+    `long` index tensor shaped like x; used both by `snap_to_nearest` (gather the
+    value) and by the cross-entropy-over-levels loss (the per-element class label).
     """
     # build_uniform guarantees >= 2 levels (bits >= 1), so levels[1] is always valid.
     xf = x.to(levels.dtype)
     step = levels[1] - levels[0]
     # z = position of x on the level grid; ceil(z - 0.5) = round-half-down.
     idx = torch.ceil((xf - levels[0]) / step - 0.5)
-    idx = idx.clamp(0, levels.numel() - 1).to(torch.long)
-    return levels[idx]
+    return idx.clamp(0, levels.numel() - 1).to(torch.long)
+
+
+def snap_to_nearest(x: torch.Tensor, levels: torch.Tensor) -> torch.Tensor:
+    """Map each element of x to the closest entry of `levels`. Output keeps
+    `levels`' dtype. See `snap_to_index` for the (rounding-based, ONNX-safe)
+    nearest-index computation this gathers from."""
+    return levels[snap_to_index(x, levels)]
 
 
 @register("quantizer", "uniform")
@@ -113,8 +120,9 @@ class Quantizer(nn.Module):
     ``out = surrogate + (forward_value - surrogate).detach()``. The legacy
     ``grad`` presets are three cells of that matrix: ``ste`` = hard+identity,
     ``soft`` = soft+soft, ``hard`` = hard+none. ``temperature`` is owned here and
-    shared by every soft-scoring path (soft forward / soft backward / future
-    cross-entropy over levels).
+    shared by every soft-scoring path (soft forward / soft backward / the
+    ``cross_entropy_levels`` loss, which reads it via ``pred_pack`` unless it sets
+    its own).
 
     When `encoder_value_range` differs from `value_range`, a linear transform is
     applied to the encoder output before quantization so that the quantization

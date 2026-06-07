@@ -103,6 +103,14 @@ def _batch_to_io(
         recon = ae.decoder(latent) if ae.decoder is not None else None
         out = {"latent": latent, "quantized_latent": latent, "recon": recon}
 
+    # Expose quantizer levels + temperature for loss terms that score over levels
+    # (e.g. cross_entropy_levels). The `ae(real, imag)` path already added these in
+    # Autoencoder.forward; setdefault covers the manually-built mask-mode branches
+    # above without overwriting. decoder_only has no quantizer → skipped.
+    if ae.quantizer is not None:
+        out.setdefault("q_levels", ae.quantizer.levels)
+        out.setdefault("q_temperature", ae.quantizer.temperature)
+
     # mask never flows through the model anymore; it's only consumed by the
     # loss (and only by terms that need it, like one_minus_sgcs).
     target: Dict[str, Any] = {"precoder": precoder, "mask": mask}

@@ -1,0 +1,63 @@
+experiment:
+  name: encoder_only_ce_levels
+  seed: 42
+  device: cpu
+  mlflow:
+    tracking_uri: http://127.0.0.1:5000
+    experiment_name: csi_compression
+    log_every_n_iters: 10
+
+data:
+  # Codeword distillation: train the student encoder to reproduce the teacher's
+  # quantization codewords. The npz must carry Zq (post-quant teacher latent);
+  # expose_zq surfaces it as latent_target_zq, which cross_entropy_levels uses as
+  # the per-element class label (the teacher's level index).
+  format: npz
+  train_path: /path/to/train_dataset.npz
+  val_path: /path/to/valid_dataset.npz
+  max_subband: 13
+  max_port: 32
+  layout: cnn
+  batch_size: 16
+  num_workers: 0
+  dataset_args:
+    expose_zq: true      # -> latent_target_zq = Zq (post-quant teacher codewords)
+
+model:
+  encoder:
+    blocks:
+      - { name: cnn_block, channels: 16, kernel: 3 }
+      - { name: linear_proj, out_dim: 16, activation: relu }
+      - { name: activation, activation: tanh }   # student encoder: tanh output → [-1, 1]
+  decoder:
+    blocks: []  # unused in encoder_only
+
+quantizer:
+  type: uniform
+  bits: 2
+  value_range: [-1.0, 1.0]
+  unit_spaced: true
+  # cross_entropy_levels is independent of the forward/backward value path; ste is
+  # fine. It reads the quantizer's `temperature` (default 1.0) to scale the per-level
+  # logits unless the loss term sets its own `params.temperature`.
+  grad: ste
+  encoder_value_range: [-1.0, 1.0]   # map encoder output (tanh, [-1,1]) into value_range
+
+training:
+  mode: encoder_only
+  epochs: 3
+  optimizer: { name: adam, lr: 1.0e-3 }
+  val_every_n_epochs: 1
+  # cross_entropy_levels has no SGCS (no decoder); track loss/total instead.
+  best_metric: { name: loss/total, mode: min }
+  amp:
+    enabled: false
+  compile:
+    enabled: false
+
+loss:
+  # Classify each latent element into the teacher's codeword bin. target_key
+  # defaults to latent_target_zq; set params.temperature to decouple the CE
+  # sharpness from the quantizer's soft-value temperature.
+  terms:
+    - { name: cross_entropy_levels, weight: 1.0, params: { target_key: latent_target_zq } }

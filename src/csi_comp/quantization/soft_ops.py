@@ -8,9 +8,10 @@ assignment-weighted level sum is the differentiable soft-quantized value
 The same scores are reused several ways, so they live here once:
   * soft *forward* value — the value fed to the decoder (`quant_forward: soft`),
   * soft *backward* surrogate — the gradient path to the encoder (`quant_backward: soft`),
-  * (future) cross-entropy over levels — `soft_assign` is the per-element
-    distribution over levels; with the teacher's level index as label it becomes
-    the CE logits/probs.
+  * cross-entropy over levels (`losses/cross_entropy_levels.py`) — `level_logits`
+    *are* the per-element CE logits (one class per level); with the teacher's level
+    index as label, `F.cross_entropy(level_logits, idx)` supervises the encoder.
+    Use `level_logits` directly here, not `soft_assign`, to avoid a double softmax.
 
 All consumers read one `temperature`, owned by the `Quantizer`, so a single
 annealing schedule drives every soft-scoring path.

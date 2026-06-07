@@ -386,6 +386,21 @@ def test_batch_to_io_exposes_rescaled_latent():
     assert pred["rescaled_latent"].shape == pred["latent"].shape
 
 
+def test_batch_to_io_exposes_quantizer_levels():
+    """pred_pack carries q_levels / q_temperature so level-scoring loss terms
+    (cross_entropy_levels) can build per-level logits without a quantizer handle.
+    Checked on both the plain ae() path and a manually-built mask-mode branch."""
+    from csi_comp.training.trainer import _batch_to_io
+    from csi_comp.training.modes import get_mode_spec as _gms
+    ae = _build_ae()
+    batch = _make_fake_batch()
+    for mask_spec in (None, LatentMaskSpec(mode="dual", mask_ratio=0.5)):
+        pred, _ = _batch_to_io(ae, batch, _gms("joint"), torch.device("cpu"), mask_spec=mask_spec)
+        assert "q_levels" in pred and "q_temperature" in pred
+        assert torch.equal(pred["q_levels"], ae.quantizer.levels)
+        assert pred["q_temperature"] == ae.quantizer.temperature
+
+
 def test_batch_to_io_forwards_latent_targets():
     """latent_target / _z / _zq in the batch all reach target_pack."""
     from csi_comp.training.trainer import _batch_to_io

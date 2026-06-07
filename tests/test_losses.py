@@ -3,7 +3,10 @@ import math
 import pytest
 import torch
 
+import torch.nn.functional as F
+
 from csi_comp.losses import (
+    CrossEntropyLevels,
     MSELatent,
     MSEQuantizedLatent,
     MSERescaledLatent,
@@ -11,6 +14,7 @@ from csi_comp.losses import (
     WeightedSumLoss,
     sgcs_per_subband,
 )
+from csi_comp.quantization import build_uniform, level_logits
 
 
 def test_sgcs_identical_inputs_is_one():
@@ -182,3 +186,70 @@ def test_weighted_sum_loss_enabled_when_list():
         mode="encoder_only_frozen_decoder",
     )
     assert len(composite.term_modules) == 1
+
+
+# ----- cross_entropy_levels -----
+
+def _ce_levels():
+    return build_uniform(bits=2, value_range=(-1.0, 1.0))  # [-0.75, -0.25, 0.25, 0.75]
+
+
+def test_cross_entropy_levels_perfect_is_near_zero():
+    levels = _ce_levels()
+    # Encoder value sits exactly on each level; teacher Zq is the same level.
+    x = levels.unsqueeze(0).clone()          # (1, 4)
+    pred = {"rescaled_latent": x, "q_levels": levels, "q_temperature": 1e-3}
+    target = {"latent_target_zq": levels.unsqueeze(0).clone()}
+    loss = CrossEntropyLevels()
+    assert loss(pred, target).item() == pytest.approx(0.0, abs=1e-3)
+
+
+def test_cross_entropy_levels_wrong_bin_is_large():
+    levels = _ce_levels()
+    x = torch.full((1, 4), 0.75)             # all snap to top level (idx 3)
+    target = {"latent_target_zq": torch.full((1, 4), -0.75)}  # teacher = bottom level (idx 0)
+    pred = {"rescaled_latent": x, "q_levels": levels, "q_temperature": 1e-3}
+    loss = CrossEntropyLevels()
+    # Confidently wrong with a tiny temperature → very large CE.
+    assert loss(pred, target).item() > 100.0
+
+
+def test_cross_entropy_levels_default_target_key():
+    assert CrossEntropyLevels().target_key == "latent_target_zq"
+
+
+def test_cross_entropy_levels_missing_target_raises():
+    levels = _ce_levels()
+    pred = {"rescaled_latent": torch.zeros(1, 4), "q_levels": levels, "q_temperature": 1.0}
+    with pytest.raises(KeyError, match="latent_target_zq"):
+        CrossEntropyLevels()(pred, {"latent_target_z": torch.zeros(1, 4)})
+
+
+def test_cross_entropy_levels_shape_mismatch_raises():
+    levels = _ce_levels()
+    pred = {"rescaled_latent": torch.zeros(1, 4), "q_levels": levels, "q_temperature": 1.0}
+    with pytest.raises(ValueError, match="shape"):
+        CrossEntropyLevels()(pred, {"latent_target_zq": torch.zeros(1, 3)})
+
+
+def test_cross_entropy_levels_temperature_override():
+    levels = _ce_levels()
+    x = torch.tensor([[0.1, -0.4, 0.6, -0.9]])       # off-grid so temperature matters
+    zq = torch.tensor([[0.25, -0.25, 0.75, -0.75]])
+    idx = torch.tensor([2, 1, 3, 0])
+    pred = {"rescaled_latent": x, "q_levels": levels, "q_temperature": 1.0}
+    target = {"latent_target_zq": zq}
+
+    # Explicit temperature is used regardless of pred_pack["q_temperature"].
+    override_T = 0.25
+    got = CrossEntropyLevels(temperature=override_T)(pred, target).item()
+    expected = F.cross_entropy(level_logits(x, levels, override_T).reshape(-1, 4), idx).item()
+    assert got == pytest.approx(expected)
+    # And it differs from using the pred_pack temperature (1.0).
+    pack_T = CrossEntropyLevels()(pred, target).item()
+    assert abs(got - pack_T) > 1e-4
+
+
+def test_cross_entropy_levels_invalid_temperature_raises():
+    with pytest.raises(ValueError, match="temperature"):
+        CrossEntropyLevels(temperature=0.0)

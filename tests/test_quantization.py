@@ -5,6 +5,7 @@ from csi_comp.quantization import (
     Quantizer,
     build_uniform,
     level_logits,
+    snap_to_index,
     snap_to_nearest,
     soft_assign,
     soft_value,
@@ -37,6 +38,16 @@ def test_snap_to_nearest():
     x = torch.tensor([0.0, -0.1, 0.4, 0.9, -1.2])
     q = snap_to_nearest(x, levels)
     assert torch.equal(q, torch.tensor([-0.25, -0.25, 0.25, 0.75, -0.75]))
+
+
+def test_snap_to_index_matches_nearest():
+    levels = torch.tensor([-0.75, -0.25, 0.25, 0.75])
+    x = torch.tensor([0.0, -0.1, 0.4, 0.9, -1.2])
+    idx = snap_to_index(x, levels)
+    assert idx.dtype == torch.long
+    assert torch.equal(idx, torch.tensor([1, 1, 2, 3, 0]))
+    # snap_to_nearest is exactly the gather of snap_to_index.
+    assert torch.equal(levels[idx], snap_to_nearest(x, levels))
 
 
 def test_quantizer_ste_forward_and_grad():
@@ -246,7 +257,8 @@ def test_encoder_value_range_to_hard_preserves_transform():
     assert torch.allclose(q(x), torch.tensor([0.75]))
 
 
-# --- soft_ops primitive (shared by soft forward/backward and future CE) ---
+# --- soft_ops primitive (shared by soft forward/backward and the
+#     cross_entropy_levels loss, which uses level_logits as the CE logits) ---
 
 def test_soft_ops_shapes_and_normalisation():
     levels = build_uniform(bits=2, value_range=(-1.0, 1.0))  # 4 levels

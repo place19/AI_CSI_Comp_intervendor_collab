@@ -48,9 +48,16 @@ class Autoencoder(nn.Module):
             rescaled = latent
             q_latent = latent
         recon = self.decoder(q_latent) if self.decoder is not None else None
-        return {
+        out: dict[str, Any] = {
             "latent": latent,
             "rescaled_latent": rescaled,
             "quantized_latent": q_latent,
             "recon": recon,
         }
+        # Expose the quantizer's levels + temperature so loss terms that score over
+        # levels (e.g. cross_entropy_levels) can build per-level logits from
+        # `rescaled_latent` without a handle to the quantizer module.
+        if self.quantizer is not None:
+            out["q_levels"] = self.quantizer.levels
+            out["q_temperature"] = self.quantizer.temperature
+        return out
