@@ -1,0 +1,71 @@
+experiment:
+  name: joint_cnn_hardfwd_softbwd_smoke
+  seed: 42
+  device: cpu
+  gpu_index: 0
+  mlflow:
+    tracking_uri: http://127.0.0.1:5000
+    experiment_name: csi_compression
+    log_every_n_iters: 10
+
+data:
+  format: npz
+  train_path: /path/to/train_dataset.npz
+  val_path: /path/to/valid_dataset.npz
+  max_subband: 13
+  max_port: 32
+  layout: cnn
+  batch_size: 16
+  num_workers: 0
+
+model:
+  encoder:
+    blocks:
+      - { name: cnn_block, channels: 16, kernel: 3 }
+      - { name: cnn_block, channels: 32, kernel: 3 }
+      - { name: linear_proj, out_dim: 64, activation: relu }
+      - { name: activation, activation: tanh }
+  decoder:
+    blocks:
+      - { name: linear_proj, out_dim: 128, activation: relu }
+      - { name: reshape_head, max_subband: "${data.max_subband}", max_port: "${data.max_port}" }
+    pretrained_path: null
+
+quantizer:
+  type: uniform
+  bits: 2
+  value_range: [-1.0, 1.0]    # decoder input range; quantization levels defined here
+  unit_spaced: true
+  # Decoupled forward (value to decoder) / backward (gradient surrogate) axes.
+  # Here: the decoder always sees the exact HARD codes (no train/eval gap), while
+  # the encoder receives the smooth SOFT gradient instead of STE's flat identity.
+  #
+  # forward:  hard | soft
+  # backward: identity (STE) | soft | none
+  # temperature: shared by soft forward / soft backward / future CE over levels.
+  #
+  # Legacy presets still work as a `grad:` *string*:
+  #   grad: ste   == { forward: hard, backward: identity }
+  #   grad: soft  == { forward: soft, backward: soft }
+  #   grad: hard  == { forward: hard, backward: none }
+  grad:
+    forward: hard
+    backward: soft
+    temperature: 1.0
+  # encoder_value_range: [-1.0, 1.0]  # optional; unchanged by the forward/backward split
+
+training:
+  mode: joint
+  epochs: 3
+  optimizer: { name: adam, lr: 1.0e-3 }
+  scheduler: { name: cosine, T_max: 3 }
+  val_every_n_epochs: 1
+  best_metric: { name: sgcs, mode: max }
+  amp:
+    enabled: false
+  compile:
+    enabled: false
+
+loss:
+  terms:
+    - { name: one_minus_sgcs, weight: 1.0 }

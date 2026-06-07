@@ -1,7 +1,14 @@
 import pytest
 import torch
 
-from csi_comp.quantization import Quantizer, build_uniform, snap_to_nearest
+from csi_comp.quantization import (
+    Quantizer,
+    build_uniform,
+    level_logits,
+    snap_to_nearest,
+    soft_assign,
+    soft_value,
+)
 from csi_comp.quantization.base import build_quantizer
 
 
@@ -87,9 +94,9 @@ def test_eval_snap_matches_bruteforce_many_bits():
 
 def test_quantizer_to_hard_swaps_grad():
     q = Quantizer(bits=2, value_range=(-1.0, 1.0), grad="ste")
-    assert q.grad_name == "ste"
+    assert (q.forward_name, q.backward_name) == ("hard", "identity")
     q.to_hard()
-    assert q.grad_name == "hard"
+    assert (q.forward_name, q.backward_name) == ("hard", "none")
     x = torch.tensor([0.4])
     y = q(x)
     assert torch.allclose(y, torch.tensor([0.25]))
@@ -233,7 +240,121 @@ def test_encoder_value_range_to_hard_preserves_transform():
     q = Quantizer(bits=2, value_range=(-1.0, 1.0),
                   encoder_value_range=(0.0, 1.0), grad="ste")
     q.to_hard()
-    assert q.grad_name == "hard"
+    assert (q.forward_name, q.backward_name) == ("hard", "none")
     # x=0.875 in encoder range → x'=0.75 → snaps to 0.75
     x = torch.tensor([0.875])
     assert torch.allclose(q(x), torch.tensor([0.75]))
+
+
+# --- soft_ops primitive (shared by soft forward/backward and future CE) ---
+
+def test_soft_ops_shapes_and_normalisation():
+    levels = build_uniform(bits=2, value_range=(-1.0, 1.0))  # 4 levels
+    x = torch.randn(3, 5)
+    logits = level_logits(x, levels, temperature=1.0)
+    assert logits.shape == (3, 5, 4)
+    probs = soft_assign(x, levels, temperature=1.0)
+    assert probs.shape == (3, 5, 4)
+    assert torch.allclose(probs.sum(dim=-1), torch.ones(3, 5), atol=1e-6)
+
+
+def test_soft_value_matches_weighted_sum():
+    levels = build_uniform(bits=3, value_range=(-1.0, 1.0))
+    x = torch.randn(7)
+    expected = (soft_assign(x, levels, 0.5) * levels).sum(dim=-1)
+    assert torch.allclose(soft_value(x, levels, 0.5), expected)
+
+
+def test_soft_value_collapses_to_nearest_at_low_temperature():
+    levels = build_uniform(bits=2, value_range=(-1.0, 1.0))
+    x = torch.tensor([0.4, -0.6, 0.9])
+    assert torch.allclose(
+        soft_value(x, levels, temperature=1e-4), snap_to_nearest(x, levels), atol=1e-3
+    )
+
+
+# --- two-axis forward/backward decoupling ---
+
+def test_legacy_presets_map_to_axes():
+    assert (Quantizer(bits=2, value_range=(-1.0, 1.0), grad="ste").forward_name,
+            Quantizer(bits=2, value_range=(-1.0, 1.0), grad="ste").backward_name) \
+        == ("hard", "identity")
+    q_soft = Quantizer(bits=2, value_range=(-1.0, 1.0), grad="soft")
+    assert (q_soft.forward_name, q_soft.backward_name) == ("soft", "soft")
+    q_hard = Quantizer(bits=2, value_range=(-1.0, 1.0), grad="hard")
+    assert (q_hard.forward_name, q_hard.backward_name) == ("hard", "none")
+
+
+def test_grad_mapping_equivalent_to_ste_preset():
+    # Explicit two-axis spec must reproduce the `ste` preset bit-for-bit (value + grad).
+    q = Quantizer(bits=2, value_range=(-1.0, 1.0),
+                  grad={"forward": "hard", "backward": "identity"})
+    assert (q.forward_name, q.backward_name) == ("hard", "identity")
+    x = torch.tensor([0.4, -0.6, 0.9], requires_grad=True)
+    y = q(x)
+    assert torch.allclose(y.detach(), torch.tensor([0.25, -0.75, 0.75]))
+    y.sum().backward()
+    assert torch.allclose(x.grad, torch.ones_like(x))
+
+
+def test_grad_mapping_name_form_still_works():
+    q = Quantizer(bits=2, value_range=(-1.0, 1.0),
+                  grad={"name": "soft", "temperature": 0.5})
+    assert (q.forward_name, q.backward_name) == ("soft", "soft")
+    assert q.temperature == 0.5
+
+
+def test_hard_forward_soft_backward():
+    # forward value is the exact hard snap (no train/eval gap), gradient is the
+    # smooth soft surrogate (not STE's flat identity).
+    q = Quantizer(bits=2, value_range=(-1.0, 1.0),
+                  grad={"forward": "hard", "backward": "soft", "temperature": 1.0})
+    q.train()
+    x = torch.tensor([0.4, -0.6, 0.9], requires_grad=True)
+    y = q(x)
+    # value == hard snap
+    assert torch.allclose(y.detach(), torch.tensor([0.25, -0.75, 0.75]))
+    y.sum().backward()
+    assert x.grad is not None and torch.isfinite(x.grad).all()
+    # soft gradient is generally not the all-ones STE gradient
+    assert not torch.allclose(x.grad, torch.ones_like(x))
+
+
+def test_soft_forward_identity_backward():
+    # forward value is the continuous soft blend, gradient is identity (STE).
+    q = Quantizer(bits=2, value_range=(-1.0, 1.0),
+                  grad={"forward": "soft", "backward": "identity", "temperature": 1.0})
+    q.train()
+    levels = q.levels
+    x = torch.tensor([0.4, -0.6, 0.9], requires_grad=True)
+    y = q(x)
+    assert torch.allclose(y.detach(), soft_value(x.detach(), levels, 1.0))
+    y.sum().backward()
+    assert torch.allclose(x.grad, torch.ones_like(x))  # identity backward
+
+
+def test_new_combos_hard_snap_in_eval():
+    # Eval always hard-snaps regardless of the forward axis.
+    for spec in ({"forward": "soft", "backward": "identity"},
+                 {"forward": "hard", "backward": "soft"}):
+        q = Quantizer(bits=2, value_range=(-1.0, 1.0), grad=spec)
+        q.eval()
+        x = torch.tensor([0.4, -0.6, 0.9])
+        assert torch.allclose(q(x), torch.tensor([0.25, -0.75, 0.75]))
+
+
+def test_grad_mapping_invalid_keys():
+    with pytest.raises(ValueError):
+        Quantizer(bits=2, value_range=(-1.0, 1.0),
+                  grad={"forward": "hard", "backward": "soft", "bogus": 1})
+    with pytest.raises(ValueError):
+        # neither 'name' nor both axes
+        Quantizer(bits=2, value_range=(-1.0, 1.0), grad={"forward": "hard"})
+    with pytest.raises(ValueError):
+        Quantizer(bits=2, value_range=(-1.0, 1.0), grad="bogus")
+
+
+def test_temperature_validated_for_any_combo():
+    with pytest.raises(ValueError):
+        Quantizer(bits=2, value_range=(-1.0, 1.0),
+                  grad={"forward": "hard", "backward": "soft", "temperature": 0.0})

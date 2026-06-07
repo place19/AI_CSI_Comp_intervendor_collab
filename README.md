@@ -11,7 +11,7 @@ Built around a config-driven, registry-based block system so new encoders/decode
 - **Inter-vendor training modes**: `joint`, `encoder_only`, `decoder_only`, `encoder_only_frozen_decoder`.
 - **Registry-based blocks**: CNN, depthwise-separable conv, residual, average pooling, transformer (custom Q/K/V/O with selectable pre/post-LN), positional encoding (fixed sin/cos · learnable random · learnable sin/cos), reshape, linear projection, standalone activation, bounding head, reshape head, complex FFN head (per-branch real/imag projections). Add a new block with a single `@register("block", "name")` decorator.
 - **Fixed-shape forward contract**: every block declares `out_shape` in `__init__` and has a single `forward(x) -> x` signature; the encoder/decoder builder propagates shapes statically. Padding masks live only on the data batch and are consumed by the loss — not threaded through the model.
-- **Configurable quantizer**: uniform quantization with pluggable gradient strategies (STE / soft / hard). Bit-width, range, and level spacing all configurable. The chosen `grad` strategy is used only during training — in `eval()` the quantizer always hard-snaps to the nearest level, so validation / `test.py` / `infer.py` reflect the deployed (hard) quantizer (a `soft` quantizer would otherwise emit continuous values at eval and overstate SGCS).
+- **Configurable quantizer**: uniform quantization with **decoupled forward / backward axes**. The value sent to the decoder (`quant_forward`: `hard` snap | `soft` blend) and the gradient surrogate flowing to the encoder (`quant_backward`: `identity`/STE | `soft` | `none`) are chosen independently and combined via the straight-through identity `out = surrogate + (forward_value - surrogate).detach()`. `quantizer.grad` accepts a preset string (`ste` = hard+identity, `soft` = soft+soft, `hard` = hard+none — all backward compatible) or a mapping (`{forward: hard, backward: soft, temperature: 1.0}`) — e.g. hard forward + soft backward gives the decoder exact codes (no train/eval gap) while the encoder gets a smooth gradient. Bit-width, range, and level spacing all configurable. The forward/backward choice applies only during training — in `eval()` the quantizer always hard-snaps to the nearest level, so validation / `test.py` / `infer.py` reflect the deployed (hard) quantizer (a `soft` forward would otherwise emit continuous values at eval and overstate SGCS).
 - **Composite loss**: weighted sum of named loss terms (`one_minus_sgcs`, `mse_latent`, `mse_rescaled_latent`, `mse_quantized_latent`, `dual_one_minus_sgcs`, …). The latent-space MSE terms pick their teacher (Z / Zq) per term via `params.target_key`. Add new terms via the loss registry.
 - **Latent masking** (`model.latent_mask`): zero out the trailing fraction of the quantized latent before the decoder to simulate partial-bandwidth scenarios. Four modes: `full` (disabled), `half` (fixed), `random` (per-sample augmentation), `dual` (decoder called twice; loss is a weighted sum of full- and half-latent reconstructions). Applies only when both encoder and decoder are present (`joint`, `encoder_only_frozen_decoder`); automatically skipped in `encoder_only` and `decoder_only` modes.
 - **Schedulers**: PyTorch built-ins (`cosine`, `step`, `none`) plus a custom `warmup_cosine` (linear warmup → cosine annealing, iteration-unit).
@@ -280,7 +280,10 @@ quantizer:
   bits: 2
   value_range: [-1.0, 1.0]          # decoder input range; quantization levels defined here
   unit_spaced: true
-  grad: ste                          # ste | soft | hard (train-time only; eval always hard-snaps)
+  grad: ste                          # preset (ste | soft | hard), OR a two-axis mapping:
+  # grad: { forward: hard|soft, backward: identity|soft|none, temperature: 1.0 }
+  #   ste = {hard, identity} | soft = {soft, soft} | hard = {hard, none}
+  #   (train-time only; eval always hard-snaps)
   # encoder_value_range: [-1.0, 1.0] # optional; encoder output range (e.g. tanh → [-1,1],
   #                                   # sigmoid → [0,1]). A linear transform maps encoder output
   #                                   # → value_range before quantization. Omit when the same.
@@ -380,7 +383,7 @@ The same pattern (`@register("loss"|"quantizer"|"dataset"|"scheduler", "...")`) 
 ## Testing
 
 ```bash
-pytest                # full suite (363 tests)
+pytest                # full suite (389 tests)
 pytest tests/test_amp.py tests/test_compile.py tests/test_onnx_fuse.py -v
 pytest tests/test_latent_mask.py -v   # latent masking unit + integration tests
 ```
@@ -398,7 +401,7 @@ src/csi_comp/
     blocks/              # block implementations
     encoder.py decoder.py autoencoder.py
     latent_mask.py       # LatentMaskSpec + masking helpers
-  quantization/          # UniformQuantizer + gradient strategies (STE / soft / hard)
+  quantization/          # UniformQuantizer + decoupled forward (hard/soft) / backward (identity/soft/none) axes; soft_ops shared primitive
   losses/                # SGCS, MSE latent, dual SGCS, composite WeightedSumLoss
   training/
     trainer.py           # mode-agnostic loop (AMP-aware)
@@ -416,7 +419,7 @@ src/csi_comp/
 
 scripts/                 # train.py, test.py, export_onnx.py, infer.py
 configs/                 # examples/
-tests/                   # pytest suite (363 tests)
+tests/                   # pytest suite (389 tests)
 ```
 
 ---

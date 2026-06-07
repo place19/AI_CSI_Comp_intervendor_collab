@@ -8,7 +8,8 @@ REGISTRY: Dict[str, Dict[str, Type]] = {
     "quantizer": {},
     "loss": {},
     "dataset": {},
-    "grad": {},
+    "quant_forward": {},
+    "quant_backward": {},
     "scheduler": {},
 }
 
