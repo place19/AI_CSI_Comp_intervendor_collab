@@ -1,3 +1,5 @@
+import struct
+
 import numpy as np
 import pytest
 import torch
@@ -12,6 +14,66 @@ from csi_comp.data import (
     transformer_seq_mask,
 )
 from csi_comp.registry import get as reg_get
+from csi_comp.utils import parse_scale
+
+
+# ----- parse_scale (number | little-endian float64 hex bit pattern) -----
+
+def test_parse_scale_number_passthrough():
+    assert parse_scale(0.25) == 0.25
+    assert parse_scale(2) == 2.0
+
+
+def test_parse_scale_hex_little_endian_roundtrip():
+    for x in (1.0 / 128.0, 0.5, 2.0, -0.375):
+        h = struct.pack("<d", x).hex()  # little-endian bit pattern
+        assert parse_scale(h) == x
+        assert parse_scale("0x" + h) == x       # 0x prefix tolerated
+        assert parse_scale("  " + h + " ") == x  # surrounding whitespace tolerated
+
+
+def test_parse_scale_hex_known_value():
+    # 1/128 == 0.0078125 == 2^-7 → little-endian "000000000000803f".
+    assert parse_scale("0x000000000000803f") == 1.0 / 128.0
+
+
+def test_parse_scale_bad_hex_length_raises():
+    with pytest.raises(ValueError, match="8 bytes"):
+        parse_scale("0x3f80")  # 2 bytes, not a float64
+
+
+def test_parse_scale_bad_hex_chars_raises():
+    with pytest.raises(ValueError, match="invalid hex"):
+        parse_scale("0xnothex")
+
+
+# ----- per-component encoder-input scale -----
+
+def test_npz_scale_real_imag_override(npz_root):
+    ds = NpzDataset(npz_root / "train.npz", scale=1.0,
+                    scale_real=2.0, scale_imag=3.0, target_offset=0.0)
+    base = NpzDataset(npz_root / "train.npz", scale=1.0, target_offset=0.0)
+    s, b = ds[0], base[0]
+    assert torch.allclose(s["real"], b["real"] * 2.0)
+    assert torch.allclose(s["imag"], b["imag"] * 3.0)
+    # target follows the (per-component) scale too — only the factory scopes these
+    # to the aug input; the dataset itself stays internally consistent.
+    assert torch.allclose(s["real_target"], b["real"] * 2.0)
+
+
+def test_npz_scale_real_only_falls_back_to_scale_for_imag(npz_root):
+    ds = NpzDataset(npz_root / "train.npz", scale=0.01, scale_real=2.0, target_offset=0.0)
+    base = NpzDataset(npz_root / "train.npz", scale=0.01, target_offset=0.0)
+    s, b = ds[0], base[0]
+    assert torch.allclose(s["real"], b["real"] * 200.0)  # 2.0 vs 0.01
+    assert torch.allclose(s["imag"], b["imag"])           # imag still uses scale=0.01
+
+
+def test_npz_scale_hex_string(npz_root):
+    h = struct.pack("<d", 2.0).hex()
+    ds = NpzDataset(npz_root / "train.npz", scale=1.0, scale_real=h, target_offset=0.0)
+    base = NpzDataset(npz_root / "train.npz", scale=1.0, target_offset=0.0)
+    assert torch.allclose(ds[0]["real"], base[0]["real"] * 2.0)
 
 
 def test_npz_dataset_basic(npz_root):

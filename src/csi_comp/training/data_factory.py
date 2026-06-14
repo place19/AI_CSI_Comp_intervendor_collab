@@ -19,6 +19,12 @@ YAML schema (all keys optional unless marked required):
       aug_train_path: ...               # optional
       aug_val_path: ...                 # optional
 
+      # Optional constructor overrides applied ONLY to the augmented-input dataset
+      # (merged on top of dataset_args, latent args excluded). Use for the
+      # per-component phase-augmentation scales so the encoder input is scaled
+      # differently from the reconstruction target:
+      aug_dataset_args: { scale_real: ..., scale_imag: ... }   # optional
+
       # Optional defaults applied to both train and val loaders:
       num_workers: int                  # default 0
       pin_memory: bool                  # default False
@@ -89,15 +95,43 @@ _LATENT_DATASET_ARGS = (
     "latent_key", "expose_z", "expose_zq", "z_key_prefix", "zq_key_prefix", "latent_dtype",
 )
 
+# Per-component encoder-input scales (phase augmentation). They only ever describe
+# the augmented encoder *input*, never the reconstruction target / non-aug input, so
+# they are stripped from the base build and only fed to the augmented-input dataset.
+_AUG_ONLY_DATASET_ARGS = ("scale_real", "scale_imag")
 
-def _build_dataset(cls, extra: dict[str, Any], path: Any, aug_path: Any):
+
+def _build_dataset(
+    cls,
+    extra: dict[str, Any],
+    path: Any,
+    aug_path: Any,
+    aug_override: dict[str, Any] | None = None,
+):
     """Build a dataset from `path`, optionally pairing an augmented-input dataset
-    from `aug_path` on top of it (augmented encoder input -> clean target)."""
-    ds = cls(path, **extra)
+    from `aug_path` on top of it (augmented encoder input -> clean target).
+
+    `scale_real` / `scale_imag` are aug-input-only: stripped from the base dataset
+    so the reconstruction target keeps the plain `scale`, and forwarded to the
+    augmented-input dataset (where they override the per-channel scale). They may be
+    supplied in `data.dataset_args` (inherited by the aug build) or, scoped purely
+    to the aug build, in `data.aug_dataset_args` (`aug_override`, which wins on
+    conflict).
+    """
+    base_extra = {k: v for k, v in extra.items() if k not in _AUG_ONLY_DATASET_ARGS}
+    ds = cls(path, **base_extra)
     if aug_path:
+        # Aug input supplies only real/imag — drop latent args, keep scale_real/imag.
         aug_extra = {k: v for k, v in extra.items() if k not in _LATENT_DATASET_ARGS}
+        if aug_override:
+            aug_extra = {**aug_extra, **aug_override}
         ds = PairedInputDataset(ds, cls(aug_path, **aug_extra))
     return ds
+
+
+def _aug_override(cls, data_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Filtered `data.aug_dataset_args` — per-aug-dataset constructor overrides."""
+    return filter_kwargs(cls.__init__, dict(data_cfg.get("aug_dataset_args", {}) or {}))
 
 
 def build_val_loader(data_cfg: dict[str, Any]) -> DataLoader:
@@ -110,7 +144,10 @@ def build_val_loader(data_cfg: dict[str, Any]) -> DataLoader:
     fmt = data_cfg["format"]
     cls = reg_get("dataset", fmt)
     extra: dict[str, Any] = filter_kwargs(cls.__init__, dict(data_cfg.get("dataset_args", {}) or {}))
-    val_ds = _build_dataset(cls, extra, data_cfg["val_path"], data_cfg.get("aug_val_path"))
+    aug_override = _aug_override(cls, data_cfg)
+    val_ds = _build_dataset(
+        cls, extra, data_cfg["val_path"], data_cfg.get("aug_val_path"), aug_override
+    )
     coll = make_collate_fn(int(data_cfg["max_subband"]), int(data_cfg["max_port"]))
     # Exclude drop_last from common so training-convenience settings don't silently
     # drop the last partial batch during evaluation.
@@ -127,8 +164,13 @@ def build_dataloaders(data_cfg: dict[str, Any]) -> tuple[DataLoader, DataLoader]
     fmt = data_cfg["format"]
     cls = reg_get("dataset", fmt)
     extra: dict[str, Any] = filter_kwargs(cls.__init__, dict(data_cfg.get("dataset_args", {}) or {}))
-    train_ds = _build_dataset(cls, extra, data_cfg["train_path"], data_cfg.get("aug_train_path"))
-    val_ds = _build_dataset(cls, extra, data_cfg["val_path"], data_cfg.get("aug_val_path"))
+    aug_override = _aug_override(cls, data_cfg)
+    train_ds = _build_dataset(
+        cls, extra, data_cfg["train_path"], data_cfg.get("aug_train_path"), aug_override
+    )
+    val_ds = _build_dataset(
+        cls, extra, data_cfg["val_path"], data_cfg.get("aug_val_path"), aug_override
+    )
     coll = make_collate_fn(int(data_cfg["max_subband"]), int(data_cfg["max_port"]))
 
     # Top-level fields act as defaults for both loaders.

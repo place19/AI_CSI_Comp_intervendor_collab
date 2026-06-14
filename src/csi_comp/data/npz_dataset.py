@@ -19,6 +19,7 @@ import torch
 from torch.utils.data import Dataset
 
 from ..registry import register
+from ..utils import parse_scale
 
 _DEFAULT_SCALE = 1.0 / 128.0
 _DEFAULT_TARGET_OFFSET = 1.0 / 256.0
@@ -29,6 +30,17 @@ class NpzDataset(Dataset):
     """Args:
         path:           path to the .npz file.
         scale:          multiplicative scale applied after int → float32 cast on `D`.
+                        Accepts a number or a hex float64 bit pattern (see
+                        `csi_comp.utils.parse_scale`).
+        scale_real:     OPTIONAL per-component override of `scale` for the real
+                        channel (`D[..., 0]`). When None (default) `scale` is used.
+        scale_imag:     OPTIONAL per-component override of `scale` for the imag
+                        channel (`D[..., 1]`). When None (default) `scale` is used.
+                        These exist for phase-augmentation: the data factory wires
+                        them onto the **augmented encoder-input** dataset only, so a
+                        run can feed the encoder real/imag scaled differently while
+                        the reconstruction target keeps the plain `scale`. Each
+                        accepts a number or a hex float64 bit pattern.
         target_offset:  additive offset applied on top of `scale` to produce the
                         reconstruction target (`real_target`/`imag_target`). Models
                         the bin-midpoint dequantization step required by 3GPP/HW
@@ -56,8 +68,10 @@ class NpzDataset(Dataset):
     def __init__(
         self,
         path: str | Path,
-        scale: float = _DEFAULT_SCALE,
+        scale: float | str = _DEFAULT_SCALE,
         target_offset: float = _DEFAULT_TARGET_OFFSET,
+        scale_real: float | str | None = None,
+        scale_imag: float | str | None = None,
         latent_key: Optional[str] = None,
         expose_z: bool = True,
         expose_zq: bool = False,
@@ -73,8 +87,11 @@ class NpzDataset(Dataset):
             raise ValueError(f"D must have shape (N, S, P, 2); got {D.shape}")
         self.D = torch.from_numpy(np.ascontiguousarray(D))
         self.S, self.P = int(D.shape[1]), int(D.shape[2])
-        self.scale = float(scale)
+        self.scale = parse_scale(scale)
         self.target_offset = float(target_offset)
+        # Per-component scales fall back to the single `scale` when unset.
+        self.scale_real = self.scale if scale_real is None else parse_scale(scale_real)
+        self.scale_imag = self.scale if scale_imag is None else parse_scale(scale_imag)
 
         latents = {"Zq": Zq, "Z": Z, None: None}
         if latent_key not in latents:
@@ -110,13 +127,14 @@ class NpzDataset(Dataset):
         return int(self.D.shape[0])
 
     def __getitem__(self, i: int) -> dict[str, Any]:
-        a = self.D[i].to(torch.float32) * self.scale  # (S, P, 2)
-        t = a + self.target_offset                    # bin-midpoint target
+        d = self.D[i].to(torch.float32)               # (S, P, 2)
+        real = d[..., 0] * self.scale_real
+        imag = d[..., 1] * self.scale_imag
         out: dict[str, Any] = {
-            "real": a[..., 0],
-            "imag": a[..., 1],
-            "real_target": t[..., 0],
-            "imag_target": t[..., 1],
+            "real": real,
+            "imag": imag,
+            "real_target": real + self.target_offset,  # bin-midpoint target
+            "imag_target": imag + self.target_offset,
             "true_shape": (self.S, self.P),
         }
         if self.latent_target is not None:

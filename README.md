@@ -22,7 +22,7 @@ Built around a config-driven, registry-based block system so new encoders/decode
   - **MLflow** (optional): windowed-mean train metrics, **epoch-indexed validation metrics**, per-run note with full config + per-block FLOPs/params/output shapes, resolved-config artifact. Checkpoints are NOT uploaded — they live only in `outputs/<run>/`.
 - **Devices**: `cpu`, `cuda` (selected via `CUDA_VISIBLE_DEVICES`), `mps` (Apple Silicon). For `test.py` / `infer.py`, `gpu_index` embedded in the checkpoint config cannot be applied before `torch.load()` — pass `--device cuda --gpu-index N` on the CLI to select a specific GPU with these scripts.
 - **Data formats**: raw int8 LMDB (`lmdb_raw`) and single-file `.npz` (`npz`). `D` (int8 CSI) is the only required array; `Z`/`Zq` (latent arrays) are optional and only needed for `decoder_only` mode or latent-space losses. Datasets emit a separate `real_target`/`imag_target` pair offset by `target_offset` (default `1/256`) to model the 3GPP/HW int8 floor-quantization bin midpoint.
-- **Augmented-input training** (`augmented CSI → target CSI`): set optional `data.aug_train_path` / `data.aug_val_path` to feed an augmented (UE-condition) dataset as the **encoder input** while the reconstruction target stays the clean CSI from `train_path` / `val_path`. Omit them for the default `target CSI → target CSI`. Index-aligned, same format + `dataset_args` (latent-related args like `latent_key` / `expose_z` / `expose_zq` are stripped for the augmented dataset — it only supplies the encoder input, so its file needs no latent arrays); only meaningful when the encoder is trained. `test.py` / `infer.py` honour the embedded `aug_val_path` and expose `--aug-data-path` to override it.
+- **Augmented-input training** (`augmented CSI → target CSI`): set optional `data.aug_train_path` / `data.aug_val_path` to feed an augmented (UE-condition) dataset as the **encoder input** while the reconstruction target stays the clean CSI from `train_path` / `val_path`. Omit them for the default `target CSI → target CSI`. Index-aligned, same format + `dataset_args` (latent-related args like `latent_key` / `expose_z` / `expose_zq` are stripped for the augmented dataset — it only supplies the encoder input, so its file needs no latent arrays); only meaningful when the encoder is trained. `test.py` / `infer.py` honour the embedded `aug_val_path` and expose `--aug-data-path` to override it. For phase augmentation the augmented encoder input can be scaled per channel via `scale_real` / `scale_imag` (overriding the single `scale` for `D[...,0]` / `D[...,1]`); these apply to the augmented input only (the target keeps the plain `scale`) and accept a number or a little-endian float64 hex bit pattern — set them in `data.dataset_args` or, scoped to the aug build, `data.aug_dataset_args`.
 - **DataLoader knobs from YAML**: `num_workers`, `pin_memory`, `prefetch_factor`, `persistent_workers`, `drop_last` plus per-split `train_loader` / `val_loader` overrides.
 - **Mixed precision (AMP)**: `training.amp.{enabled, dtype}` wraps the forward in `torch.amp.autocast` for train + val. Two fp32 islands are baked in — loss computation and MHA softmax — to prevent backprop blow-ups seen under naive fp16. `GradScaler` is only constructed for cuda + fp16.
 - **`torch.compile`** (optional): `training.compile.{enabled, mode, fullgraph}` compiles encoder and decoder separately (quantizer stays uncompiled — STE backward is hostile to graph capture). Dynamic shapes are always disabled (`dynamic=False`) since DataLoader batches are fixed-size and CUDA Graph-based modes require static shapes. Checkpoints save the underlying `_orig_mod` state_dict so disk files load cleanly into compiled or uncompiled inference builds.
@@ -76,6 +76,17 @@ to index-aligned datasets of the same format. Their samples become the **encoder
 input** while the reconstruction target stays the clean CSI from
 `train_path` / `val_path`. Omit them for the default `target CSI → target CSI`.
 See `configs/examples/joint_cnn_aug_input.yaml`.
+
+For phase augmentation the augmented encoder input can be scaled per channel:
+`scale_real` / `scale_imag` override the single `scale` for the real
+(`D[..., 0]`) / imag (`D[..., 1]`) channel. They apply to the **augmented input
+only** — the reconstruction target keeps the plain `scale` — and are a no-op
+without `aug_*_path`. Put them in `data.dataset_args`, or scope them purely to
+the aug build with `data.aug_dataset_args` (per-aug-dataset constructor
+overrides). Each scale (and `scale` itself) accepts a number **or** a hex string
+parsed as the little-endian IEEE-754 float64 bit pattern
+(e.g. `1/128 == "0x000000000000803F"`), so an exact double survives without
+decimal round-trip loss.
 
 ### 2. (Optional) Start an MLflow server
 
@@ -218,6 +229,11 @@ data:
   # dataset_args, index-aligned with train/val. Omit for target CSI -> target CSI.
   # aug_train_path: /path/to/train_dataset_augmented.npz
   # aug_val_path: /path/to/valid_dataset_augmented.npz
+  # Constructor overrides applied ONLY to the augmented-input dataset (merged over
+  # dataset_args, latent args excluded). Use for the per-component phase-aug scales:
+  # aug_dataset_args:
+  #   scale_real: "0x..."              # see dataset_args.scale_real below
+  #   scale_imag: "0x..."
   max_subband: 13
   max_port: 32
   layout: cnn                        # 'cnn' or 'transformer'
@@ -235,6 +251,13 @@ data:
   # train_loader: { shuffle: true,  drop_last: false }   # per-split overrides
   # val_loader:   { shuffle: false, drop_last: false }
   dataset_args:
+    # scale: 0.0078125                # = 1/128 (default). int sample × scale. Number OR
+    #                                  hex string (little-endian float64 bit pattern,
+    #                                  e.g. "0x000000000000803F" == 1/128).
+    # scale_real / scale_imag:        # OPTIONAL per-channel override of `scale` (real =
+    #                                  D[...,0], imag = D[...,1]); number or hex string.
+    #                                  Aug-input ONLY (stripped from target/non-aug build);
+    #                                  a no-op without aug_*_path. Phase augmentation.
     # latent_key: null                # null (default) | 'Zq' | 'Z' — primary latent
     #                                  slot (decoder_only input); set for decoder_only.
     # expose_z: true                  # expose Z  as latent_target_z  (npz + lmdb_raw)
@@ -383,7 +406,7 @@ The same pattern (`@register("loss"|"quantizer"|"dataset"|"scheduler", "...")`) 
 ## Testing
 
 ```bash
-pytest                # full suite (398 tests)
+pytest                # full suite (410 tests)
 pytest tests/test_amp.py tests/test_compile.py tests/test_onnx_fuse.py -v
 pytest tests/test_latent_mask.py -v   # latent masking unit + integration tests
 ```
@@ -419,7 +442,7 @@ src/csi_comp/
 
 scripts/                 # train.py, test.py, export_onnx.py, infer.py
 configs/                 # examples/
-tests/                   # pytest suite (398 tests)
+tests/                   # pytest suite (410 tests)
 ```
 
 ---

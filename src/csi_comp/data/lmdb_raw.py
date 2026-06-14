@@ -19,6 +19,7 @@ import torch
 from torch.utils.data import Dataset
 
 from ..registry import register
+from ..utils import parse_scale
 
 _DEFAULT_SCALE = 1.0 / 128.0
 _DEFAULT_TARGET_OFFSET = 1.0 / 256.0
@@ -35,6 +36,15 @@ class LmdbRawDataset(Dataset):
         subband:             S, the subband count.
         port:                P, the port count.
         scale:               multiplicative scale applied after int8 → float32 cast.
+                             Accepts a number or a hex float64 bit pattern (see
+                             `csi_comp.utils.parse_scale`).
+        scale_real:          OPTIONAL per-component override of `scale` for the real
+                             channel (`D[..., 0]`); None → use `scale`.
+        scale_imag:          OPTIONAL per-component override of `scale` for the imag
+                             channel (`D[..., 1]`); None → use `scale`. Wired by the
+                             data factory onto the augmented encoder-input dataset
+                             only (phase augmentation); each accepts a number or a
+                             hex float64 bit pattern.
         key_prefix:          default "D" — keys look like "D000000".
         dtype:               on-disk integer dtype ("i1" for int8, "i2" for int16, etc.).
         expose_z:            if True, also load the pre-quant teacher latent from
@@ -59,8 +69,10 @@ class LmdbRawDataset(Dataset):
         root: str | Path,
         subband: int,
         port: int,
-        scale: float = _DEFAULT_SCALE,
+        scale: float | str = _DEFAULT_SCALE,
         target_offset: float = _DEFAULT_TARGET_OFFSET,
+        scale_real: float | str | None = None,
+        scale_imag: float | str | None = None,
         key_prefix: str = "D",
         dtype: str = "i1",
         expose_z: bool = False,
@@ -72,8 +84,11 @@ class LmdbRawDataset(Dataset):
         self.root = str(Path(root))
         self.S = int(subband)
         self.P = int(port)
-        self.scale = float(scale)
+        self.scale = parse_scale(scale)
         self.target_offset = float(target_offset)
+        # Per-component scales fall back to the single `scale` when unset.
+        self.scale_real = self.scale if scale_real is None else parse_scale(scale_real)
+        self.scale_imag = self.scale if scale_imag is None else parse_scale(scale_imag)
         self.key_prefix = key_prefix
         self.np_dtype = _np_dtype(dtype)
         # (out_key, on-disk prefix) for each enabled teacher latent.
@@ -144,7 +159,9 @@ class LmdbRawDataset(Dataset):
         if raw is None:
             raise KeyError(f"missing key {key!r} in lmdb at {self.root}")
         a = np.frombuffer(raw, dtype=self.np_dtype).reshape(self.S, self.P, 2)
-        a = a.astype(np.float32) * self.scale
+        a = a.astype(np.float32)                       # writable copy (frombuffer is read-only)
+        a[..., 0] *= self.scale_real
+        a[..., 1] *= self.scale_imag
         t = torch.from_numpy(a)
         tgt = t + self.target_offset                  # bin-midpoint target
         sample: dict[str, Any] = {

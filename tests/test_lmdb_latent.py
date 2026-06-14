@@ -117,6 +117,39 @@ def test_lmdb_raw_count_ignores_d_prefixed_metadata_keys(tmp_path):
     assert len(ds) == n, f"expected {n}, got {len(ds)} — D_meta inflated the count"
 
 
+def test_lmdb_raw_scale_real_imag_override(tmp_path):
+    """scale_real/scale_imag scale D[...,0]/D[...,1] separately; unset → use scale.
+    Also exercises the hex (little-endian float64 bit pattern) form.
+
+    `_make_lmdb` is deterministic (fixed seed) so identical-content dbs in separate
+    dirs are comparable — distinct dirs are required because lmdb refuses to open
+    the same env twice in one process (each dataset keeps a persistent handle).
+    """
+    import struct
+
+    n, S, P, latent_dim = 4, 3, 4, 8
+    _make_lmdb(tmp_path / "base", n, S, P, latent_dim)
+    _make_lmdb(tmp_path / "scaled", n, S, P, latent_dim)
+    _make_lmdb(tmp_path / "half", n, S, P, latent_dim)
+
+    base = LmdbRawDataset(root=tmp_path / "base", subband=S, port=P, scale=1.0)
+    ds = LmdbRawDataset(
+        root=tmp_path / "scaled", subband=S, port=P, scale=1.0,
+        scale_real=struct.pack("<d", 2.0).hex(),  # hex string
+        scale_imag=3.0,                            # number
+    )
+    s, b = ds[0], base[0]
+    assert torch.allclose(s["real"], b["real"] * 2.0)
+    assert torch.allclose(s["imag"], b["imag"] * 3.0)
+
+    # imag unset → falls back to `scale`
+    half_real = LmdbRawDataset(root=tmp_path / "half", subband=S, port=P,
+                               scale=0.5, scale_real=4.0)
+    s2 = half_real[0]
+    assert torch.allclose(s2["real"], b["real"] * 4.0)   # base used scale=1.0
+    assert torch.allclose(s2["imag"], b["imag"] * 0.5)   # imag uses scale=0.5
+
+
 def test_lmdb_raw_default_exposes_no_latent(tmp_path):
     """Default (no expose_*) counts only {key_prefix}{idx:06d} and emits no latent.
     Auxiliary key families (Zq here) are silently ignored — keeps len(ds) sane when

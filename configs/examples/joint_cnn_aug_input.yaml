@@ -21,6 +21,20 @@ data:
   # Remove these two keys to fall back to the default "target -> target" training.
   aug_train_path: /path/to/train_dataset_augmented.npz
   aug_val_path: /path/to/valid_dataset_augmented.npz
+  # Phase augmentation: scale the augmented ENCODER INPUT per channel (real =
+  # D[...,0], imag = D[...,1]). scale_real/scale_imag override the single `scale`
+  # for that channel only; an unset channel falls back to `scale`. These apply to
+  # the augmented input ONLY — the reconstruction target keeps the base `scale`
+  # below — and are a no-op without aug_*_path. Put them in aug_dataset_args to
+  # scope them to the aug build, or in dataset_args (they're still stripped from
+  # the target/non-aug build). Each value is a number OR a hex string parsed as the
+  # little-endian IEEE-754 float64 bit pattern (e.g. 1/128 == "0x000000000000803F").
+  # aug_dataset_args:
+  #   scale_real: "0x000000000000803F"   # hex float64 = 1/128 = 0.0078125
+  #   scale_imag: 0.0078125              # or a plain number
+  # dataset_args:
+  #   scale: 0.0078125                   # base scale for target + non-aug input
+  #   target_offset: 0.00390625          # = 1/256 (3GPP/HW bin midpoint); 0.0 to disable
   max_subband: 13
   max_port: 32
   layout: cnn

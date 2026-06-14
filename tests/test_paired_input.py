@@ -102,6 +102,63 @@ def test_build_val_loader_wraps_with_aug_val(npz_root, tmp_path, make_npz):
     assert isinstance(val.dataset, PairedInputDataset)
 
 
+# ----- per-component encoder-input scale (phase augmentation) -----
+
+def test_aug_dataset_args_scales_input_only(npz_root, tmp_path, make_npz):
+    """aug_dataset_args.scale_real/imag scale the encoder input; the clean target
+    keeps the base `scale`."""
+    aug_train = make_npz(tmp_path / "aug_train.npz", n=8, seed=11)
+    cfg = _base_cfg(npz_root)
+    cfg["aug_train_path"] = str(aug_train)
+    cfg["dataset_args"] = {"scale": 1.0, "target_offset": 0.0}
+    cfg["aug_dataset_args"] = {"scale_real": 2.0, "scale_imag": 3.0}
+    cfg["train_loader"] = {"shuffle": False}
+    train, _ = build_dataloaders(cfg)
+
+    batch = next(iter(train))
+    aug_ds = NpzDataset(aug_train, scale=1.0, target_offset=0.0)
+    tgt_ds = NpzDataset(npz_root / "train.npz", scale=1.0, target_offset=0.0)
+    S, P = batch["true_shapes"][0]
+    # encoder input = augmented D × per-component scale
+    assert torch.allclose(batch["real"][0, :S, :P], aug_ds[0]["real"] * 2.0)
+    assert torch.allclose(batch["imag"][0, :S, :P], aug_ds[0]["imag"] * 3.0)
+    # reconstruction target = clean D × base scale (NOT per-component)
+    assert torch.allclose(batch["real_target"][0, :S, :P], tgt_ds[0]["real_target"])
+    assert torch.allclose(batch["imag_target"][0, :S, :P], tgt_ds[0]["imag_target"])
+
+
+def test_scale_real_in_dataset_args_routes_to_aug_only(npz_root, tmp_path, make_npz):
+    """scale_real may sit in dataset_args: it still only scales the aug input,
+    never the target (the base build strips it)."""
+    aug_train = make_npz(tmp_path / "aug_train.npz", n=8, seed=13)
+    cfg = _base_cfg(npz_root)
+    cfg["aug_train_path"] = str(aug_train)
+    cfg["dataset_args"] = {"scale": 1.0, "target_offset": 0.0, "scale_real": 2.0}
+    cfg["train_loader"] = {"shuffle": False}
+    train, _ = build_dataloaders(cfg)
+
+    batch = next(iter(train))
+    aug_ds = NpzDataset(aug_train, scale=1.0, target_offset=0.0)
+    tgt_ds = NpzDataset(npz_root / "train.npz", scale=1.0, target_offset=0.0)
+    S, P = batch["true_shapes"][0]
+    assert torch.allclose(batch["real"][0, :S, :P], aug_ds[0]["real"] * 2.0)
+    assert torch.allclose(batch["real_target"][0, :S, :P], tgt_ds[0]["real_target"])
+
+
+def test_scale_real_ignored_without_aug(npz_root):
+    """Without aug paths the per-component scale is a no-op (aug data가 있을 때만)."""
+    cfg = _base_cfg(npz_root)
+    cfg["dataset_args"] = {"scale": 1.0, "target_offset": 0.0, "scale_real": 2.0}
+    cfg["train_loader"] = {"shuffle": False}
+    train, _ = build_dataloaders(cfg)
+
+    batch = next(iter(train))
+    base = NpzDataset(npz_root / "train.npz", scale=1.0, target_offset=0.0)
+    S, P = batch["true_shapes"][0]
+    # scale_real NOT applied — encoder input == base scale
+    assert torch.allclose(batch["real"][0, :S, :P], base[0]["real"])
+
+
 def test_paired_batch_flows_through_collate(npz_root, tmp_path, make_npz):
     """End-to-end: a paired loader yields a batch with swapped encoder input
     and clean target, padded correctly."""
