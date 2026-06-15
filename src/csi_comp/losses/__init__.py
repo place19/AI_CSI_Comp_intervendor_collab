@@ -2,7 +2,7 @@ from .composite import WeightedSumLoss
 from .cross_entropy_levels import CrossEntropyLevels
 from .dual_sgcs import DualOneMinusSGCS
 from .mse_latent import MSELatent, MSEQuantizedLatent, MSERescaledLatent
-from .sgcs import OneMinusSGCS, sgcs_per_subband
+from .sgcs import OneMinusSGCS, nmse_aligned_per_subband, sgcs_per_subband
 
 __all__ = [
     "CrossEntropyLevels",
@@ -12,5 +12,6 @@ __all__ = [
     "MSEQuantizedLatent",
     "MSERescaledLatent",
     "WeightedSumLoss",
+    "nmse_aligned_per_subband",
     "sgcs_per_subband",
 ]

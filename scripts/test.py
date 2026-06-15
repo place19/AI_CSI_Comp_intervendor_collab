@@ -183,6 +183,7 @@ def main() -> int:
         amp_spec=amp_spec,
         mask_spec=mask_spec,
         use_cuda_graphs=uses_cuda_graphs(cfg["training"].get("compile")),
+        compute_nmse=True,  # report aligned NMSE alongside SGCS (test-time metric)
     )
     prefix = "test" if args.data_path is not None else "val"
     val_metrics = trainer.validate(prefix=prefix)

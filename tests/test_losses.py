@@ -12,6 +12,7 @@ from csi_comp.losses import (
     MSERescaledLatent,
     OneMinusSGCS,
     WeightedSumLoss,
+    nmse_aligned_per_subband,
     sgcs_per_subband,
 )
 from csi_comp.quantization import build_uniform, level_logits
@@ -52,6 +53,39 @@ def test_sgcs_phase_invariance():
 def test_sgcs_bad_shape_raises():
     with pytest.raises(ValueError):
         sgcs_per_subband(torch.randn(2, 5, 8, 3), torch.randn(2, 5, 8, 3))
+
+
+def test_nmse_aligned_identical_is_zero():
+    w = torch.randn(2, 5, 8, 2)
+    nmse = nmse_aligned_per_subband(w, w)
+    assert torch.allclose(nmse, torch.zeros_like(nmse), atol=1e-6)
+
+
+def test_nmse_aligned_invariant_to_scale_and_phase():
+    # The metric unit-norms and zeroes port-0 phase first, so a global scale
+    # and phase rotation of the reconstruction must leave NMSE at ~0.
+    w = torch.randn(2, 3, 6, 2)
+    scale = 3.7
+    cos, sin = math.cos(1.234), math.sin(1.234)
+    w_hat_r = scale * (cos * w[..., 0] - sin * w[..., 1])
+    w_hat_i = scale * (sin * w[..., 0] + cos * w[..., 1])
+    w_hat = torch.stack([w_hat_r, w_hat_i], dim=-1)
+    nmse = nmse_aligned_per_subband(w, w_hat)
+    assert torch.allclose(nmse, torch.zeros_like(nmse), atol=1e-6)
+
+
+def test_nmse_aligned_unrelated_is_positive():
+    # Distinct random precoders should give a clearly non-zero aligned NMSE.
+    torch.manual_seed(0)
+    w = torch.randn(4, 2, 8, 2)
+    w_hat = torch.randn(4, 2, 8, 2)
+    nmse = nmse_aligned_per_subband(w, w_hat)
+    assert (nmse > 1e-3).all()
+
+
+def test_nmse_aligned_bad_shape_raises():
+    with pytest.raises(ValueError):
+        nmse_aligned_per_subband(torch.randn(2, 5, 8, 3), torch.randn(2, 5, 8, 3))
 
 
 def test_one_minus_sgcs_mask_aware():

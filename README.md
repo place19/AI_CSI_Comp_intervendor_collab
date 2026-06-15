@@ -190,6 +190,8 @@ python scripts/infer.py \
   --data-path /path/to/data.npz
 ```
 
+`test.py` reports a scale+phase-**aligned NMSE** alongside SGCS (`val/nmse`, or `test/nmse` with `--data-path`). Since SGCS is invariant to global scale and phase, both target and reconstruction are unit-normed and rotated to zero port-0 phase per subband before the NMSE is taken — so it measures the residual error SGCS can't see. This is a test-time-only metric (off during training validation).
+
 `test.py` and `infer.py` inherit `training.amp` and `training.compile` from the embedded checkpoint config. To evaluate in strict fp32 without compile, override them on the CLI:
 
 ```bash
@@ -406,7 +408,7 @@ The same pattern (`@register("loss"|"quantizer"|"dataset"|"scheduler", "...")`) 
 ## Testing
 
 ```bash
-pytest                # full suite (410 tests)
+pytest                # full suite (415 tests)
 pytest tests/test_amp.py tests/test_compile.py tests/test_onnx_fuse.py -v
 pytest tests/test_latent_mask.py -v   # latent masking unit + integration tests
 ```
@@ -442,7 +444,7 @@ src/csi_comp/
 
 scripts/                 # train.py, test.py, export_onnx.py, infer.py
 configs/                 # examples/
-tests/                   # pytest suite (410 tests)
+tests/                   # pytest suite (415 tests)
 ```
 
 ---

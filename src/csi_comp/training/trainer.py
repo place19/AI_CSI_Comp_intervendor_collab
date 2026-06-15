@@ -176,6 +176,9 @@ class Trainer:
     amp_spec: Optional[AmpSpec] = None
     mask_spec: Optional[LatentMaskSpec] = None
     use_cuda_graphs: bool = False
+    # Test-time only: also report scale+phase-aligned NMSE alongside SGCS. Off by
+    # default so the training validation loop is unchanged; test.py flips it on.
+    compute_nmse: bool = False
 
     # Runtime state
     epoch: int = 0
@@ -336,6 +339,21 @@ class Trainer:
                     sgcs = sgcs_per_subband(target, recon)
                     mean_sgcs = sgcs.mean()
                 m["sgcs"] = float(mean_sgcs.detach().cpu().item())
+        # Scale+phase-aligned NMSE (test-time only; gated by compute_nmse). Same
+        # masked-mean reduction as SGCS so validate() aggregates it identically.
+        if self.compute_nmse and pred_pack.get("recon") is not None:
+            from ..losses.sgcs import nmse_aligned_per_subband
+            recon = pred_pack["recon"]
+            target = target_pack["precoder"]
+            mask = target_pack.get("mask")
+            if mask is not None:
+                mask4d = mask.unsqueeze(-1)
+                nmse = nmse_aligned_per_subband(target * mask4d, recon * mask4d)
+                sb_valid = mask.any(dim=-1).to(nmse.dtype)
+                mean_nmse = (nmse * sb_valid).sum() / (sb_valid.sum() + 1e-12)
+            else:
+                mean_nmse = nmse_aligned_per_subband(target, recon).mean()
+            m["nmse"] = float(mean_nmse.detach().cpu().item())
         return m
 
     def _update_best(self, val_metrics: Dict[str, float]) -> None:

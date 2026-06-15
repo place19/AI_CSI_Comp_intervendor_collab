@@ -46,6 +46,54 @@ def _masked_mean(values: torch.Tensor, mask: torch.Tensor, eps: float) -> torch.
     return (values * mask).sum() / (mask.sum() + eps)
 
 
+def _align_unit_phase(x: torch.Tensor, eps: float) -> torch.Tensor:
+    """Unit-norm each per-subband precoder and rotate it so port 0 has zero phase.
+
+    Input/output `(..., P, 2)` with the last dim `[real, imag]`. The L2 norm is
+    taken over (P, real/imag) so the whole complex vector becomes unit norm; then
+    each vector is multiplied by ``e^{-j·θ₀} = conj(z₀)/|z₀|`` (θ₀ = phase of port
+    0), which lands port 0 on the positive real axis. SGCS is invariant to global
+    scale and phase, so this canonicalisation is what makes a plain MSE between
+    target and reconstruction meaningful (see `nmse_aligned_per_subband`).
+    Masked-out ports must already be zeroed by the caller; port 0 is assumed valid.
+    """
+    r, i = x[..., 0], x[..., 1]                                  # (..., P)
+    norm = torch.sqrt((r * r + i * i).sum(dim=-1, keepdim=True) + eps)  # (..., 1)
+    r, i = r / norm, i / norm
+    r0, i0 = r[..., 0:1], i[..., 0:1]                            # (..., 1) port-0 ref
+    mag0 = torch.sqrt(r0 * r0 + i0 * i0 + eps)
+    c, s = r0 / mag0, i0 / mag0                                  # rotation e^{-jθ₀}=c-js
+    # rotate z=(r+ji) by (c - js): real = r·c + i·s, imag = i·c - r·s
+    return torch.stack([r * c + i * s, i * c - r * s], dim=-1)
+
+
+def nmse_aligned_per_subband(
+    w: torch.Tensor,
+    w_hat: torch.Tensor,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """Normalized MSE per (batch, subband) after scale+phase alignment. (B, S).
+
+    Both the target `w` and reconstruction `w_hat` (each `(..., S, P, 2)`) are
+    unit-normed and phase-aligned per subband (`_align_unit_phase`); the NMSE is
+    then the energy ratio ``Σ_p |w_align − ŵ_align|² / Σ_p |w_align|²`` over ports.
+    Because both are unit-norm the denominator is ≈1, so this reduces to the
+    aligned reconstruction-error energy — but the ratio form is kept so it stays
+    the textbook NMSE. A test-time metric only (SGCS hides scale/phase error).
+    Pre-zero masked ports (multiply by the mask) as for `sgcs_per_subband`.
+    """
+    if w.shape != w_hat.shape:
+        raise ValueError(f"shape mismatch: {w.shape} vs {w_hat.shape}")
+    if w.dim() < 4 or w.shape[-1] != 2:
+        raise ValueError(f"expected (..., S, P, 2), got {w.shape}")
+    w = _align_unit_phase(w, eps)
+    h = _align_unit_phase(w_hat, eps)
+    diff = w - h
+    num = (diff[..., 0] ** 2 + diff[..., 1] ** 2).sum(dim=-1)    # (B, S)
+    den = (w[..., 0] ** 2 + w[..., 1] ** 2).sum(dim=-1)          # (B, S) ≈ 1
+    return num / (den + eps)
+
+
 @register("loss", "one_minus_sgcs")
 class OneMinusSGCS(nn.Module):
     name = "one_minus_sgcs"

@@ -142,6 +142,31 @@ def test_trainer_joint_one_epoch_improves_loss(npz_root):
     assert last_loss <= first_loss + 0.5
 
 
+def test_trainer_compute_nmse_gates_metric(npz_root):
+    # validate() reports val/nmse only when compute_nmse is on (test.py sets it);
+    # the default-off path keeps the training validation loop unchanged.
+    seed_everything(0)
+    cfg = _cfg("joint")
+    spec = get_mode_spec("joint")
+    ae, _, _ = build_model(cfg, spec)
+    _, val_loader = _loaders(npz_root)
+    loss_fn = WeightedSumLoss(cfg["loss"]["terms"], mode="joint")
+    opt = build_optimizer(ae, {"name": "adam", "lr": 1e-2})
+
+    def _trainer(compute_nmse: bool):
+        return Trainer(
+            model=ae, optimizer=opt, loss_fn=loss_fn,
+            train_loader=val_loader, val_loader=val_loader,
+            mode_spec=spec, device=torch.device("cpu"),
+            epochs=0, compute_nmse=compute_nmse,
+        )
+
+    assert "val/nmse" not in _trainer(False).validate()
+    on = _trainer(True).validate()
+    assert "val/nmse" in on
+    assert on["val/nmse"] >= 0.0  # energy ratio is non-negative
+
+
 def test_trainer_frozen_decoder_does_not_update_decoder(npz_root, tmp_path, make_npz):
     """End-to-end inter-vendor sanity: train decoder_only first, save it,
     then load it as a frozen decoder for encoder_only_frozen_decoder mode and
