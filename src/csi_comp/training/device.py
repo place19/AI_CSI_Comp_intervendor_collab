@@ -30,9 +30,12 @@ def configure_device(experiment_cfg: dict[str, Any]) -> torch.device:
         return torch.device("cpu")
     if device == "cuda":
         gpu_index = experiment_cfg.get("gpu_index", 0)
-        # Only set the env var if it's not already set by the launcher.
-        if "CUDA_VISIBLE_DEVICES" not in os.environ:
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(int(gpu_index))
+        # `gpu_index` is authoritative — assign directly so it overrides any
+        # pre-existing CUDA_VISIBLE_DEVICES. NOTE: this only affects GPU selection
+        # when it runs before torch initialises CUDA; the entry-point scripts set
+        # it earlier via set_cuda_visible_early()/set_cuda_visible_from_args(), and
+        # this assignment keeps the env consistent for direct/library callers.
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(int(gpu_index))
         # We always address cuda:0 inside the process; CUDA_VISIBLE_DEVICES handles selection.
         return torch.device("cuda:0")
     if device == "mps":

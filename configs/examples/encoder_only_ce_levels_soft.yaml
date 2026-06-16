@@ -1,0 +1,64 @@
+experiment:
+  name: encoder_only_ce_levels_soft
+  seed: 42
+  device: cpu
+  mlflow:
+    tracking_uri: http://127.0.0.1:5000
+    experiment_name: csi_compression
+    log_every_n_iters: 10
+
+data:
+  # Soft-label codeword distillation: instead of classifying each latent element
+  # into the teacher's single hard bin, the teacher's PRE-quant Z is turned into a
+  # distribution over levels and used as a soft cross-entropy target (KD style).
+  # This keeps "how close to the bin boundary was the teacher" — info the hard
+  # snap discards — so it must be supervised against Z (NOT Zq, which is already
+  # snapped). expose_z surfaces Z as latent_target_z.
+  format: npz
+  train_path: /path/to/train_dataset.npz
+  val_path: /path/to/valid_dataset.npz
+  max_subband: 13
+  max_port: 32
+  layout: cnn
+  batch_size: 16
+  num_workers: 0
+  dataset_args:
+    expose_z: true       # -> latent_target_z = Z (pre-quant teacher latent)
+
+model:
+  encoder:
+    blocks:
+      - { name: cnn_block, channels: 16, kernel: 3 }
+      - { name: linear_proj, out_dim: 16, activation: relu }
+      - { name: activation, activation: tanh }   # student encoder: tanh output → [-1, 1]
+  decoder:
+    blocks: []  # unused in encoder_only
+
+quantizer:
+  type: uniform
+  bits: 2
+  value_range: [-1.0, 1.0]
+  unit_spaced: true
+  grad: ste
+  encoder_value_range: [-1.0, 1.0]   # map encoder output (tanh, [-1,1]) into value_range
+
+training:
+  mode: encoder_only
+  epochs: 3
+  optimizer: { name: adam, lr: 1.0e-3 }
+  val_every_n_epochs: 1
+  best_metric: { name: loss/total, mode: min }
+  amp:
+    enabled: false
+  compile:
+    enabled: false
+
+loss:
+  # soft_labels: true switches the teacher label from a hard bin index to a full
+  # soft_assign distribution over levels. teacher_temperature controls the label
+  # sharpness independently of `temperature` (the student-logit T); leaving it
+  # unset reuses `temperature`. teacher_temperature → 0 recovers the hard label.
+  terms:
+    - { name: cross_entropy_levels, weight: 1.0,
+        params: { target_key: latent_target_z, soft_labels: true,
+                  temperature: 0.5, teacher_temperature: 0.3 } }

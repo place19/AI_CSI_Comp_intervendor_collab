@@ -15,7 +15,7 @@ from csi_comp.losses import (
     nmse_aligned_per_subband,
     sgcs_per_subband,
 )
-from csi_comp.quantization import build_uniform, level_logits
+from csi_comp.quantization import build_uniform, level_logits, soft_assign
 
 
 def test_sgcs_identical_inputs_is_one():
@@ -287,3 +287,78 @@ def test_cross_entropy_levels_temperature_override():
 def test_cross_entropy_levels_invalid_temperature_raises():
     with pytest.raises(ValueError, match="temperature"):
         CrossEntropyLevels(temperature=0.0)
+
+
+# ----- cross_entropy_levels: soft-label (KD) mode -----
+
+def test_cross_entropy_levels_soft_default_off():
+    loss = CrossEntropyLevels()
+    assert loss.soft_labels is False
+    assert loss.teacher_temperature is None
+
+
+def test_cross_entropy_levels_soft_invalid_teacher_temperature_raises():
+    with pytest.raises(ValueError, match="teacher_temperature"):
+        CrossEntropyLevels(soft_labels=True, teacher_temperature=0.0)
+
+
+def test_cross_entropy_levels_soft_matches_soft_assign_target():
+    levels = _ce_levels()
+    x = torch.tensor([[0.1, -0.4, 0.6, -0.9]])      # student pre-quant value
+    z = torch.tensor([[0.2, -0.3, 0.55, -0.7]])     # pre-quant teacher Z (off-grid)
+    pred = {"rescaled_latent": x, "q_levels": levels, "q_temperature": 1.0}
+    target = {"latent_target_z": z}
+
+    T_student, T_teacher = 0.5, 0.3
+    got = CrossEntropyLevels(
+        target_key="latent_target_z",
+        temperature=T_student,
+        soft_labels=True,
+        teacher_temperature=T_teacher,
+    )(pred, target).item()
+
+    soft_target = soft_assign(z, levels, T_teacher)
+    expected = F.cross_entropy(
+        level_logits(x, levels, T_student).reshape(-1, 4),
+        soft_target.reshape(-1, 4),
+    ).item()
+    assert got == pytest.approx(expected)
+
+
+def test_cross_entropy_levels_soft_teacher_temp_defaults_to_student():
+    levels = _ce_levels()
+    x = torch.tensor([[0.1, -0.4, 0.6, -0.9]])
+    z = torch.tensor([[0.2, -0.3, 0.55, -0.7]])
+    pred = {"rescaled_latent": x, "q_levels": levels, "q_temperature": 1.0}
+    target = {"latent_target_z": z}
+
+    T = 0.5
+    # teacher_temperature unset → reuse the student temperature T.
+    got = CrossEntropyLevels(
+        target_key="latent_target_z", temperature=T, soft_labels=True
+    )(pred, target).item()
+    explicit = CrossEntropyLevels(
+        target_key="latent_target_z", temperature=T, soft_labels=True,
+        teacher_temperature=T,
+    )(pred, target).item()
+    assert got == pytest.approx(explicit)
+
+
+def test_cross_entropy_levels_soft_sharp_teacher_approaches_hard():
+    """As teacher_temperature → 0 the soft label collapses to the hard bin index,
+    so soft and hard CE agree."""
+    levels = _ce_levels()
+    x = torch.tensor([[0.1, -0.4, 0.6, -0.9]])
+    z = torch.tensor([[0.2, -0.3, 0.55, -0.7]])
+    pred = {"rescaled_latent": x, "q_levels": levels, "q_temperature": 1.0}
+    target = {"latent_target_z": z}
+
+    T_student = 0.5
+    soft = CrossEntropyLevels(
+        target_key="latent_target_z", temperature=T_student,
+        soft_labels=True, teacher_temperature=1e-4,
+    )(pred, target).item()
+    hard = CrossEntropyLevels(
+        target_key="latent_target_z", temperature=T_student,
+    )(pred, target).item()
+    assert soft == pytest.approx(hard, abs=1e-3)

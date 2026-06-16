@@ -82,10 +82,15 @@ def apply_cli_device(experiment_cfg: dict, args: argparse.Namespace) -> None:
 
 def set_cuda_visible_early(experiment_cfg: dict) -> None:
     """Must be called BEFORE torch is imported. Sets CUDA_VISIBLE_DEVICES so
-    `cuda:0` inside the process maps to the requested GPU."""
+    `cuda:0` inside the process maps to the requested GPU.
+
+    The config's `gpu_index` is authoritative: it is assigned directly and
+    overrides any pre-existing CUDA_VISIBLE_DEVICES in the environment (a shell
+    export or launcher default would otherwise silently win and pin training to
+    that GPU regardless of `gpu_index`)."""
     if str(experiment_cfg.get("device", "cpu")).lower() == "cuda":
         gpu_index = experiment_cfg.get("gpu_index", 0)
-        os.environ.setdefault("CUDA_VISIBLE_DEVICES", str(int(gpu_index)))
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(int(gpu_index))
 
 
 def set_cuda_visible_from_args(args: argparse.Namespace) -> None:
@@ -95,9 +100,11 @@ def set_cuda_visible_from_args(args: argparse.Namespace) -> None:
     This covers the case where test.py/infer.py must torch.load the checkpoint
     to read the embedded config (so set_cuda_visible_early cannot fire first).
     GPU index from the embedded config is NOT applied here — that requires
-    torch.load and is an accepted limitation of the embedded-config approach."""
+    torch.load and is an accepted limitation of the embedded-config approach.
+    When --gpu-index is given it is assigned directly (overrides any pre-existing
+    CUDA_VISIBLE_DEVICES) so the explicit CLI choice is honoured."""
     if getattr(args, "device", None) == "cuda" and getattr(args, "gpu_index", None) is not None:
-        os.environ.setdefault("CUDA_VISIBLE_DEVICES", str(int(args.gpu_index)))
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(int(args.gpu_index))
 
 
 _QUANTIZER_DEFAULTS: dict = {"type": "uniform", "unit_spaced": True}

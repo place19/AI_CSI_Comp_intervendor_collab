@@ -69,6 +69,20 @@ def test_configure_device_cpu():
     assert configure_device({"device": "cpu"}).type == "cpu"
 
 
+def test_configure_device_cuda_overrides_visible_devices(monkeypatch):
+    """gpu_index is authoritative: configure_device assigns CUDA_VISIBLE_DEVICES
+    directly, overriding a pre-existing value (the old `setdefault` let a stale
+    env var silently pin selection to the wrong GPU). Does not touch real CUDA —
+    only the env var + the returned virtual device are asserted."""
+    import os
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    dev = configure_device({"device": "cuda", "gpu_index": 3})
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "3"
+    # Inside the process we always address the (remapped) cuda:0.
+    assert dev.type == "cuda" and dev.index == 0
+
+
 def test_build_model_joint(npz_root):
     cfg = _cfg("joint")
     spec = get_mode_spec("joint")
