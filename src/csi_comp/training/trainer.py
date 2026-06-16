@@ -341,6 +341,10 @@ class Trainer:
                 m["sgcs"] = float(mean_sgcs.detach().cpu().item())
         # Scale+phase-aligned NMSE (test-time only; gated by compute_nmse). Same
         # masked-mean reduction as SGCS so validate() aggregates it identically.
+        # Two flavours are reported: `nmse` is the linear energy ratio; `nmse_db_persb`
+        # is the per-subband dB (10·log10) averaged in dB space. They differ from
+        # 10·log10(mean nmse) because log(mean) != mean(log); test.py derives that
+        # dB-of-mean separately from the aggregated linear `nmse`.
         if self.compute_nmse and pred_pack.get("recon") is not None:
             from ..losses.sgcs import nmse_aligned_per_subband
             recon = pred_pack["recon"]
@@ -348,12 +352,18 @@ class Trainer:
             mask = target_pack.get("mask")
             if mask is not None:
                 mask4d = mask.unsqueeze(-1)
-                nmse = nmse_aligned_per_subband(target * mask4d, recon * mask4d)
-                sb_valid = mask.any(dim=-1).to(nmse.dtype)
-                mean_nmse = (nmse * sb_valid).sum() / (sb_valid.sum() + 1e-12)
+                nmse = nmse_aligned_per_subband(target * mask4d, recon * mask4d)  # (B, S)
+                sb_valid = mask.any(dim=-1).to(nmse.dtype)                        # (B, S)
+                denom = sb_valid.sum() + 1e-12
+                mean_nmse = (nmse * sb_valid).sum() / denom
+                nmse_db = 10.0 * torch.log10(nmse + 1e-12)
+                mean_nmse_db = (nmse_db * sb_valid).sum() / denom
             else:
-                mean_nmse = nmse_aligned_per_subband(target, recon).mean()
+                nmse = nmse_aligned_per_subband(target, recon)                    # (B, S)
+                mean_nmse = nmse.mean()
+                mean_nmse_db = (10.0 * torch.log10(nmse + 1e-12)).mean()
             m["nmse"] = float(mean_nmse.detach().cpu().item())
+            m["nmse_db_persb"] = float(mean_nmse_db.detach().cpu().item())
         return m
 
     def _update_best(self, val_metrics: Dict[str, float]) -> None:

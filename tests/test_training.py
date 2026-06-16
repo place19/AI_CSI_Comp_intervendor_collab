@@ -175,10 +175,19 @@ def test_trainer_compute_nmse_gates_metric(npz_root):
             epochs=0, compute_nmse=compute_nmse,
         )
 
-    assert "val/nmse" not in _trainer(False).validate()
+    off = _trainer(False).validate()
+    assert "val/nmse" not in off
+    assert "val/nmse_db_persb" not in off
     on = _trainer(True).validate()
     assert "val/nmse" in on
     assert on["val/nmse"] >= 0.0  # energy ratio is non-negative
+    # Per-subband dB (mean of 10·log10) is reported alongside the linear ratio.
+    assert "val/nmse_db_persb" in on
+    import math
+    # dB of the linear mean and the mean of per-subband dB are both finite, and
+    # by Jensen the mean-of-logs is <= log-of-mean (10·log10 is concave).
+    db_of_mean = 10.0 * math.log10(on["val/nmse"] + 1e-12)
+    assert on["val/nmse_db_persb"] <= db_of_mean + 1e-6
 
 
 def test_trainer_frozen_decoder_does_not_update_decoder(npz_root, tmp_path, make_npz):

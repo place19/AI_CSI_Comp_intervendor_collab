@@ -190,7 +190,15 @@ python scripts/infer.py \
   --data-path /path/to/data.npz
 ```
 
-`test.py` reports a scale+phase-**aligned NMSE** alongside SGCS (`val/nmse`, or `test/nmse` with `--data-path`). Since SGCS is invariant to global scale and phase, both target and reconstruction are unit-normed and rotated to zero port-0 phase per subband before the NMSE is taken — so it measures the residual error SGCS can't see. This is a test-time-only metric (off during training validation).
+`test.py` reports a scale+phase-**aligned NMSE** alongside SGCS in three views (all from the same per-subband aligned NMSE). Since SGCS is invariant to global scale and phase, both target and reconstruction are unit-normed and rotated to zero port-0 phase per subband before the NMSE is taken — so it measures the residual error SGCS can't see. This is a test-time-only metric (off during training validation). With `--data-path` the prefix is `test/` instead of `val/`:
+
+| metric | meaning |
+|---|---|
+| `val/nmse` | linear energy ratio (dataset mean) |
+| `val/nmse_db_mean` | `10·log10` of that linear mean — dB **of the mean** |
+| `val/nmse_db_persb` | per-subband dB averaged in dB space — mean **of the logs** |
+
+The last two differ because `log(mean) != mean(log)` (10·log10 is concave, so `nmse_db_persb ≤ nmse_db_mean`).
 
 `test.py` and `infer.py` inherit `training.amp` and `training.compile` from the embedded checkpoint config. To evaluate in strict fp32 without compile, override them on the CLI:
 

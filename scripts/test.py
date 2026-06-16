@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import math
 import sys
 from pathlib import Path
 
@@ -187,6 +188,14 @@ def main() -> int:
     )
     prefix = "test" if args.data_path is not None else "val"
     val_metrics = trainer.validate(prefix=prefix)
+    # Three NMSE views (all from the same scale+phase-aligned per-subband NMSE):
+    #   {prefix}/nmse          linear energy ratio (dataset mean)
+    #   {prefix}/nmse_db_mean  10·log10 of that linear mean (dB of the mean)
+    #   {prefix}/nmse_db_persb mean of per-subband dB values (mean of the logs)
+    # The last two differ because log(mean) != mean(log).
+    nmse_key = f"{prefix}/nmse"
+    if nmse_key in val_metrics:
+        val_metrics[f"{prefix}/nmse_db_mean"] = 10.0 * math.log10(val_metrics[nmse_key] + 1e-12)
     for k, v in sorted(val_metrics.items()):
         print(f"{k}: {v:.6f}")
     return 0
