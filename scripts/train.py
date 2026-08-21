@@ -46,10 +46,10 @@ def main() -> int:
     from csi_comp.losses.composite import WeightedSumLoss
     from csi_comp.models.latent_mask import parse_latent_mask_spec
     from csi_comp.training import (
-        ConsoleCallback, Trainer, build_dataloaders, build_model,
+        ConsoleCallback, QATCallback, Trainer, build_dataloaders, build_model,
         build_optimizer, build_scheduler, compile_autoencoder_inplace,
-        configure_device, get_mode_spec, resolve_amp_cfg, seed_everything,
-        uses_cuda_graphs,
+        configure_device, get_mode_spec, prepare_encoder_qat, resolve_amp_cfg,
+        resolve_qat_cfg, seed_everything, uses_cuda_graphs,
     )
     from csi_comp.training.checkpoint import CheckpointCallback, load_checkpoint
     from csi_comp.training.mlflow_logger import MLflowCallback, MLflowLogger
@@ -60,8 +60,24 @@ def main() -> int:
     mode = cfg["training"]["mode"]
     spec = get_mode_spec(mode)
     ae, enc_trace, dec_trace = build_model(cfg, spec)
+    # Profile the *float* architecture: QAT (below) fuses Conv+BN and swaps in
+    # fake-quantizing modules, which would make the per-block counts describe the
+    # training-time graph rather than the deployed one.
+    prof = profile_model(ae, enc_trace, dec_trace)
     if args.pretrained_checkpoint is not None:
         load_checkpoint(args.pretrained_checkpoint, ae, strict=not args.no_strict)
+    # QAT rewrites the encoder in place, so it must run before the optimizer is
+    # built (so the optimizer sees the swapped modules' parameters) and before
+    # torch.compile. Checkpoints stay float-shaped — see training/qat.py.
+    qat_spec = resolve_qat_cfg(cfg["training"].get("qat"), device)
+    if qat_spec is not None and args.pretrained_checkpoint is None:
+        print(
+            "warning: training.qat is enabled but no --pretrained-checkpoint was "
+            "given. QAT is normally a fine-tuning step on top of a trained float "
+            "model; starting from random weights is unlikely to converge well.",
+            file=sys.stderr,
+        )
+    qat_plan = prepare_encoder_qat(ae, qat_spec) if qat_spec is not None else None
     # Compile encoder/decoder *after* build (and before optimizer construction
     # so the optimizer sees the compiled-module parameters — they share storage
     # with `_orig_mod` so this is a no-op for state but keeps everything tidy).
@@ -104,7 +120,6 @@ def main() -> int:
         )
 
     with (logger if logger is not None else contextlib.nullcontext()):
-        prof = profile_model(ae, enc_trace, dec_trace)
         if logger is not None:
             logger.set_note(build_note(cfg, prof))
             logger.log_artifact(resolved_cfg_path)
@@ -114,7 +129,11 @@ def main() -> int:
         callbacks = [ConsoleCallback(log_every_n_iters=log_every)]
         if logger is not None:
             callbacks.append(MLflowCallback(logger))
-        callbacks.append(CheckpointCallback(out_dir=out_dir, config=cfg))
+        if qat_spec is not None:
+            callbacks.append(QATCallback(qat_spec))
+        callbacks.append(
+            CheckpointCallback(out_dir=out_dir, config=cfg, qat_plan=qat_plan)
+        )
         trainer = Trainer(
             model=ae,
             optimizer=optimizer,

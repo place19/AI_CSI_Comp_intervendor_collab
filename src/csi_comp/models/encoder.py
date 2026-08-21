@@ -44,19 +44,30 @@ def build_block_list(
 
 
 class Encoder(nn.Module):
-    """Layout adapter → user blocks. Returns the latent (last block's output)."""
+    """Layout adapter → quant stub → user blocks → dequant stub. Returns the latent.
+
+    `quant` / `dequant` are `nn.Identity()` in a normal float model and are swapped
+    for `QuantStub` / `DeQuantStub` by `training.qat.prepare_encoder_qat`. Eager-mode
+    QAT only attaches an observer to each QAT module's *output*, so without a stub the
+    model's very first input would be the one tensor that never sees fake-quant — yet
+    the deployment toolchain quantizes it like any other activation. `nn.Identity` has
+    no parameters, so the slots add no `state_dict` keys and existing checkpoints keep
+    loading unchanged.
+    """
 
     def __init__(self, blocks: List[nn.Module], layout: str):
         super().__init__()
         self.layout = layout
         self.layout_adapter = LayoutAdapter(layout)
+        self.quant: nn.Module = nn.Identity()
         self.blocks = nn.ModuleList(blocks)
+        self.dequant: nn.Module = nn.Identity()
 
     def forward(self, real: torch.Tensor, imag: torch.Tensor) -> torch.Tensor:
-        x = self.layout_adapter(real, imag)
+        x = self.quant(self.layout_adapter(real, imag))
         for b in self.blocks:
             x = b(x)
-        return x
+        return self.dequant(x)
 
 
 def _initial_shape(layout: str, max_S: int, max_P: int) -> Tuple[int, ...]:

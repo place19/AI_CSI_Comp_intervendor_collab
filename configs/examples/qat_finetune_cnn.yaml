@@ -1,0 +1,115 @@
+# QAT fine-tuning on top of a float-trained joint_cnn checkpoint.
+#
+#   python scripts/train.py --config configs/examples/joint_cnn.yaml --no-timestamp
+#   python scripts/train.py --config configs/examples/qat_finetune_cnn.yaml \
+#       --pretrained-checkpoint outputs/joint_cnn_smoke/best.pt
+#
+# The encoder is fake-quantized during this run, but the checkpoint it writes is
+# key-for-key identical to a normal float checkpoint — only the weights differ.
+# So test.py / infer.py / export_onnx.py consume it with no extra flags.
+#
+# The model section must match the pretrained checkpoint's architecture, or
+# --pretrained-checkpoint needs --no-strict.
+
+experiment:
+  name: qat_finetune_cnn
+  seed: 42
+  device: cpu           # QAT runs on cpu | cuda only — MPS has no fake-quant kernel
+  gpu_index: 0
+  mlflow:
+    tracking_uri: http://127.0.0.1:5000
+    experiment_name: csi_compression
+    log_every_n_iters: 10
+
+data:
+  format: npz
+  train_path: /path/to/train_dataset.npz
+  val_path: /path/to/valid_dataset.npz
+  max_subband: 13
+  max_port: 32
+  layout: cnn
+  batch_size: 16
+  num_workers: 0
+
+model:
+  encoder:
+    blocks:
+      - { name: cnn_block, channels: 16, kernel: 3 }
+      - { name: cnn_block, channels: 32, kernel: 3 }
+      - { name: linear_proj, out_dim: 64, activation: relu }
+      - { name: activation, activation: tanh }
+  decoder:
+    blocks:
+      - { name: linear_proj, out_dim: 128, activation: relu }
+      - { name: reshape_head, max_subband: "${data.max_subband}", max_port: "${data.max_port}" }
+    pretrained_path: null
+
+quantizer:
+  type: uniform
+  bits: 2
+  value_range: [-1.0, 1.0]
+  unit_spaced: true
+  grad: ste
+
+training:
+  mode: joint
+  epochs: 10
+  # Fine-tuning: keep the LR well below the float run's so the network adapts to
+  # quantization noise instead of relearning the task.
+  optimizer: { name: adamw, lr: 1.0e-4, weight_decay: 0.01 }
+  scheduler: { name: cosine, T_max: 10 }
+  val_every_n_epochs: 1
+  best_metric: { name: sgcs, mode: max }
+
+  # Quantization-Aware Training. Applies to the ENCODER only — the decoder runs at
+  # the gNB and the latent codeword quantizer (`quantizer:` above) is a separate
+  # mechanism. Validation runs with fake-quant active, so val/sgcs and best.pt
+  # selection are QAT-aware.
+  qat:
+    enabled: true
+
+    # Fold Conv+BN(+ReLU) into fused QAT modules so the fake-quant sees the same
+    # folded weight that export_onnx.py's fuse_for_inference produces at deploy
+    # time. The fold is simulated in forward, so BN is fully recovered on save.
+    fold_bn: true
+
+    # Insert QuantStub/DeQuantStub so the encoder INPUT is fake-quantized too.
+    # Without it the model's first tensor is the only one that never sees
+    # quantization error, even though the HW toolchain quantizes it like any
+    # other activation. Costs 0 keys in the saved checkpoint.
+    quantize_input: true
+    quantize_activations: true    # false -> weight-only QAT
+
+    # IMPORTANT: match these to the scheme your HW toolchain actually uses.
+    # Training per-channel weights when the HW does per-tensor teaches the
+    # network the wrong error distribution. Values below are a common default,
+    # not a guarantee.
+    #
+    # ch_axis=0 is the OUTPUT dimension in both cases: Conv2d(32,16,3,3) gets 32
+    # scales (one per out_channel), Linear(64,13312) gets 64 (one per neuron).
+    weight:     { bits: 8, dtype: qint8,  qscheme: per_channel_symmetric }
+    activation: { bits: 8, dtype: quint8, qscheme: per_tensor_affine }
+    # Optional per-kind overrides — they inherit any key they don't set from
+    # `weight`. Many NPUs support per-channel for conv but per-tensor for FC:
+    # conv_weight:   { qscheme: per_channel_symmetric }
+    # linear_weight: { qscheme: per_tensor_symmetric }
+
+    # Substring match on encoder-relative module paths. Excluded modules are
+    # neither fused nor fake-quantized and keep their float state_dict keys.
+    # Commonly used to leave the first layer at full precision.
+    exclude: []                   # e.g. ["blocks.0"]
+
+    # Late-QAT schedule (0-based epoch indices; null disables). Pin the
+    # quantization grid, then the BN statistics, so the final epochs train
+    # against exactly the parameters deployment will use.
+    freeze_observer_epoch: null   # e.g. 6
+    freeze_bn_epoch: null         # e.g. 7
+
+  amp:
+    enabled: false
+  compile:
+    enabled: false
+
+loss:
+  terms:
+    - { name: one_minus_sgcs, weight: 1.0 }

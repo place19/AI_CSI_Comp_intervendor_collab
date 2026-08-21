@@ -239,6 +239,65 @@ def test_pretrained_checkpoint_continues_training(workdir):
     assert (out / "latest.pt").exists()
 
 
+def test_qat_finetune_produces_a_plain_float_checkpoint(workdir):
+    """float run -> QAT fine-tune -> the result is consumable with zero QAT awareness.
+
+    This is the whole point of the QAT design: `test.py` and `export_onnx.py` build a
+    plain float model and load the QAT run's checkpoint strictly, because
+    `float_state_dict` undid the fusion and dropped the observers on save.
+    """
+    import torch
+
+    base = yaml.safe_load((workdir / "outputs" / "e2e_run" / "config.resolved.yaml").read_text())
+    base["experiment"]["name"] = "e2e_qat"
+    base["training"]["epochs"] = 2
+    base["training"]["qat"] = {
+        "enabled": True,
+        "fold_bn": True,
+        "quantize_input": True,
+        "quantize_activations": True,
+        "weight": {"bits": 8, "dtype": "qint8", "qscheme": "per_channel_symmetric"},
+        "activation": {"bits": 8, "dtype": "quint8", "qscheme": "per_tensor_affine"},
+        "freeze_observer_epoch": 1,
+        "freeze_bn_epoch": 1,
+    }
+    qat_cfg = workdir / "qat_cfg.yaml"
+    qat_cfg.write_text(yaml.safe_dump(base, sort_keys=False))
+
+    _run([PY, str(REPO / "scripts" / "train.py"),
+          "--config", str(qat_cfg),
+          "--pretrained-checkpoint", str(workdir / "outputs" / "e2e_run" / "best.pt"),
+          "--out-root", str(workdir / "outputs_qat"),
+          "--no-timestamp"], cwd=workdir)
+    out = workdir / "outputs_qat" / "e2e_qat"
+    assert (out / "best.pt").exists()
+
+    # The saved encoder must be byte-for-byte shaped like the float run's, and must
+    # carry no observer/fake-quant keys.
+    float_sd = torch.load(workdir / "outputs" / "e2e_run" / "best.pt",
+                          map_location="cpu", weights_only=False)
+    qat_sd = torch.load(out / "best.pt", map_location="cpu", weights_only=False)
+    assert list(qat_sd["encoder"]) == list(float_sd["encoder"])
+    assert not any(
+        p in k.split(".")
+        for k in qat_sd["encoder"]
+        for p in ("weight_fake_quant", "activation_post_process")
+    )
+    # Observer state rides along under its own key, outside the model entries.
+    assert qat_sd["qat_observers"]
+
+    # Downstream scripts consume it unchanged.
+    result = _run([PY, str(REPO / "scripts" / "test.py"),
+                   "--checkpoint", str(out / "best.pt")], cwd=workdir)
+    assert "val/sgcs" in result.stdout
+    _run([PY, str(REPO / "scripts" / "export_onnx.py"),
+          "--checkpoint", str(out / "best.pt"),
+          "--scope", "encoder,full",
+          "--out", str(out / "onnx")], cwd=workdir)
+    assert (out / "onnx" / "encoder.onnx").exists()
+    assert (out / "onnx" / "full.onnx").exists()
+
+
 def test_export_onnx_all_scopes(workdir):
     result = _run([PY, str(REPO / "scripts" / "export_onnx.py"),
                    "--checkpoint", str(workdir / "outputs" / "e2e_run" / "best.pt"),

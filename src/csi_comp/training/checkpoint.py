@@ -14,6 +14,7 @@ import torch
 from ..models import Autoencoder
 from .compile_utils import unwrap_compiled
 from .modes import ModeSpec
+from .qat import QATPlan, float_state_dict, qat_observer_state_dict
 
 
 def _format_checkpoint_filename(prefix: str, epoch: int, metric_name: str, value: float) -> str:
@@ -59,6 +60,25 @@ def _state_or_none(module) -> Optional[dict[str, Any]]:
     return unwrap_compiled(module).state_dict()
 
 
+def _encoder_state(
+    encoder, qat_plan: Optional[QATPlan]
+) -> Optional[dict[str, Any]]:
+    """Encoder state in the **plain float layout**, whatever the live module is.
+
+    Under QAT the encoder's modules have been swapped for fake-quantizing (and
+    BN-fused) equivalents. `float_state_dict` strips the observer buffers and
+    moves the absorbed BatchNorm back to its original path, so the saved
+    checkpoint is key-for-key identical to a normal float run's — only the weight
+    values differ. That is what lets `test.py` / `infer.py` / `export_onnx.py`
+    consume a QAT checkpoint without knowing QAT happened.
+    """
+    if encoder is None:
+        return None
+    if qat_plan is None:
+        return _state_or_none(encoder)
+    return float_state_dict(encoder, qat_plan)
+
+
 def save_checkpoint(
     path: Path,
     ae: Autoencoder,
@@ -68,13 +88,14 @@ def save_checkpoint(
     global_step: int,
     best_value: float,
     config: dict[str, Any],
+    qat_plan: Optional[QATPlan] = None,
 ) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     state = {
         "epoch": int(epoch),
         "global_step": int(global_step),
-        "encoder": _state_or_none(ae.encoder),
+        "encoder": _encoder_state(ae.encoder, qat_plan),
         "decoder": _state_or_none(ae.decoder),
         "quantizer": _state_or_none(ae.quantizer),
         "optimizer": optimizer.state_dict(),
@@ -82,6 +103,12 @@ def save_checkpoint(
         "best_value": float(best_value) if math.isfinite(best_value) else None,
         "config": config,
     }
+    if qat_plan is not None and ae.encoder is not None:
+        # Observer scales/zero-points live under their own top-level key so the
+        # `encoder` entry stays float-shaped. Lets a QAT run resume without
+        # re-converging the observers, and records the grid QAT settled on for
+        # configuring the external HW toolchain.
+        state["qat_observers"] = qat_observer_state_dict(ae.encoder)
     torch.save(state, path)
 
 
@@ -137,10 +164,18 @@ class CheckpointCallback:
     `out_dir` only — not uploaded to MLflow (the local outputs/ folder is the
     single source of truth)."""
 
-    def __init__(self, out_dir: Path, config: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        out_dir: Path,
+        config: dict[str, Any] | None = None,
+        qat_plan: Optional[QATPlan] = None,
+    ):
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.config = config or {}
+        # Non-None only for a QAT run; makes every checkpoint written here come
+        # out in the plain float layout (see `_encoder_state`).
+        self.qat_plan = qat_plan
         self._prev_best_descriptive: Optional[Path] = None
         self._prev_latest_descriptive: Optional[Path] = None
 
@@ -164,7 +199,7 @@ class CheckpointCallback:
         save_checkpoint(
             descriptive, trainer.model, trainer.optimizer,
             trainer.scheduler, trainer.epoch, trainer.global_step,
-            trainer.best_value, self.config,
+            trainer.best_value, self.config, qat_plan=self.qat_plan,
         )
         _link_or_copy(descriptive, self.out_dir / "latest.pt")
         prev = self._prev_latest_descriptive
@@ -186,6 +221,7 @@ class CheckpointCallback:
         save_checkpoint(
             descriptive, trainer.model, trainer.optimizer, trainer.scheduler,
             trainer.epoch, trainer.global_step, trainer.best_value, self.config,
+            qat_plan=self.qat_plan,
         )
         # best.pt is a symlink (or hardlink/copy as fallback) to the descriptive
         # file: stable path for downstream scripts (test/infer/export).
