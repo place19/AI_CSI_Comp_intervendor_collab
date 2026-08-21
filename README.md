@@ -14,6 +14,7 @@ Built around a config-driven, registry-based block system so new encoders/decode
 - **Configurable quantizer**: uniform quantization with **decoupled forward / backward axes**. The value sent to the decoder (`quant_forward`: `hard` snap | `soft` blend) and the gradient surrogate flowing to the encoder (`quant_backward`: `identity`/STE | `soft` | `none`) are chosen independently and combined via the straight-through identity `out = surrogate + (forward_value - surrogate).detach()`. `quantizer.grad` accepts a preset string (`ste` = hard+identity, `soft` = soft+soft, `hard` = hard+none — all backward compatible) or a mapping (`{forward: hard, backward: soft, temperature: 1.0}`) — e.g. hard forward + soft backward gives the decoder exact codes (no train/eval gap) while the encoder gets a smooth gradient. Bit-width, range, and level spacing all configurable. The forward/backward choice applies only during training — in `eval()` the quantizer always hard-snaps to the nearest level, so validation / `test.py` / `infer.py` reflect the deployed (hard) quantizer (a `soft` forward would otherwise emit continuous values at eval and overstate SGCS).
 - **Composite loss**: weighted sum of named loss terms (`one_minus_sgcs`, `mse_latent`, `mse_rescaled_latent`, `mse_quantized_latent`, `cross_entropy_levels`, `dual_one_minus_sgcs`, …). The latent-space terms pick their teacher (Z / Zq) per term via `params.target_key`; `cross_entropy_levels` is the discrete-label sibling of `mse_quantized_latent` — it classifies each latent element into the teacher's codeword bin (cross-entropy over quantization levels) rather than regressing the code value. It has two label modes: **hard** (default, `soft_labels: false`) snaps the teacher to a one-hot bin index (typically against Zq), while **soft** (`soft_labels: true`) turns the pre-quant teacher Z into a full distribution over levels as a knowledge-distillation soft target — `teacher_temperature` sets the label sharpness independently of the student-logit `temperature`. Add new terms via the loss registry.
 - **Latent masking** (`model.latent_mask`): zero out the trailing fraction of the quantized latent before the decoder to simulate partial-bandwidth scenarios. Four modes: `full` (disabled), `half` (fixed), `random` (per-sample augmentation), `dual` (decoder called twice; loss is a weighted sum of full- and half-latent reconstructions). Applies only when both encoder and decoder are present (`joint`, `encoder_only_frozen_decoder`); automatically skipped in `encoder_only` and `decoder_only` modes.
+- **Quantization-Aware Training** (`training.qat`, encoder-only): fine-tune a float-trained checkpoint while fake-quantizing the encoder's weights and activations, so the weights it converges to survive the int8 conversion an external HW toolchain performs later. Conv↔BN(+ReLU) is fused via each block's existing `fusion_pairs` (matching what `export_onnx.py` folds at deploy time), and optional `QuantStub`/`DeQuantStub` extend fake-quant to the encoder input. **The saved checkpoint is key-for-key identical to a plain float one** — observers are stripped and the fused BatchNorm is remapped back to its original path — so `test.py` / `infer.py` / `export_onnx.py` consume it with no flags and no QAT awareness. Weight schemes are configurable per kind (`weight` shared default, `conv_weight` / `linear_weight` overrides) to match the target toolchain, down to sub-8-bit. Requires cpu or cuda (MPS has no fake-quant kernel).
 - **Schedulers**: PyTorch built-ins (`cosine`, `step`, `none`) plus a custom `warmup_cosine` (linear warmup → cosine annealing, iteration-unit).
 - **Optimizer hygiene**: AdamW/Adam/SGD split params into decay and no-decay groups (LayerNorm + bias excluded by default, GPT-2/BERT convention).
 - **Profiler with fusion awareness**: strict per-block FLOPs (every mul and add counted) and params on the fused inference model. Blocks declare `fusion_pairs: [(absorber, absorbee), ...]` (e.g. Conv2d ↔ BatchNorm2d) and the profiler drops absorbee FLOPs/params while forcing the absorber to be counted as biased — recursively through nested blocks.
@@ -149,6 +150,12 @@ python scripts/train.py \
 python scripts/train.py \
   --config configs/examples/new_config.yaml \
   --pretrained-checkpoint outputs/<run>/best.pt --no-strict
+
+# QAT fine-tuning: same --pretrained-checkpoint flow, with a config carrying a
+# `training.qat` block. The result is a plain float checkpoint (weights only differ).
+python scripts/train.py \
+  --config configs/examples/qat_finetune_cnn.yaml \
+  --pretrained-checkpoint outputs/<float_run>/best.pt
 
 # Evaluate — single checkpoint
 python scripts/test.py --checkpoint outputs/<run>/best.pt
@@ -342,6 +349,27 @@ training:
     enabled: false
     # mode: default                  # default | reduce-overhead | max-autotune
     # fullgraph: false
+  # Quantization-Aware Training on the ENCODER (optional; omit or enabled:false to skip).
+  # Separate from `quantizer:` above, which quantizes the latent codeword.
+  # qat:
+  #   enabled: true
+  #   fold_bn: true                  # fuse Conv+BN(+ReLU) via each block's fusion_pairs
+  #   quantize_input: true           # QuantStub/DeQuantStub around the encoder. Set false
+  #                                  # when the input is already on its own int grid (e.g.
+  #                                  # per-channel scale_real/scale_imag) — a per-tensor
+  #                                  # stub would requantize it onto one shared grid.
+  #   quantize_activations: true     # false -> weight-only fake-quant
+  #   # Match these to the HW toolchain's scheme. bits/dtype/qscheme each fall back to
+  #   # built-in defaults (8, qint8, per_channel_symmetric) when omitted.
+  #   weight:     { bits: 8, dtype: qint8,  qscheme: per_channel_symmetric }
+  #   activation: { bits: 8, dtype: quint8, qscheme: per_tensor_affine }  # per-tensor only
+  #   # Optional per-kind overrides; inherit any key they don't set from `weight`.
+  #   # Many NPUs do per-channel for conv but per-tensor for fully-connected:
+  #   # linear_weight: { qscheme: per_tensor_symmetric }
+  #   exclude: []                    # substrings of encoder-relative module paths, e.g.
+  #                                  # ["blocks.0"] to keep the first layer in fp32
+  #   freeze_observer_epoch: null    # 0-based epoch to pin the quantization grid
+  #   freeze_bn_epoch: null          # 0-based epoch to freeze BN running stats
 
 loss:
   terms:
@@ -416,9 +444,10 @@ The same pattern (`@register("loss"|"quantizer"|"dataset"|"scheduler", "...")`) 
 ## Testing
 
 ```bash
-pytest                # full suite (421 tests)
+pytest                # full suite (452 tests)
 pytest tests/test_amp.py tests/test_compile.py tests/test_onnx_fuse.py -v
 pytest tests/test_latent_mask.py -v   # latent masking unit + integration tests
+pytest tests/test_qat.py -v           # QAT: fusion, float-layout checkpoint contract
 ```
 
 ---
@@ -445,6 +474,7 @@ src/csi_comp/
     checkpoint.py        # latest/best checkpointing (compile-aware)
     amp.py               # AmpSpec + autocast helpers
     compile_utils.py     # torch.compile wrap/unwrap helpers
+    qat.py               # encoder QAT: fuse + prepare_qat, float-layout state_dict
   analysis/              # FLOPs/params profiler + MLflow note
   export/
     onnx_export.py       # ONNX export at 4 scopes
@@ -452,7 +482,7 @@ src/csi_comp/
 
 scripts/                 # train.py, test.py, export_onnx.py, infer.py
 configs/                 # examples/
-tests/                   # pytest suite (421 tests)
+tests/                   # pytest suite (452 tests)
 ```
 
 ---
